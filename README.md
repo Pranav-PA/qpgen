@@ -28,6 +28,16 @@ Next.js (App Router) on Vercel · Supabase (Auth, Postgres with RLS, Storage for
 logos) · OpenAI API (GPT-5.6 family by default, configurable) · KaTeX / temml /
 mathml2omml · `docx` for Word export · print stylesheet for PDF.
 
+## This deployment
+
+Live at **https://qpgen-one.vercel.app** — deployed from `master` of
+`Pranav-PA/qpgen`; pushing to that branch redeploys automatically. Supabase
+project ref `qflxiqmwrnkscqbylwxt`. (Note the `-one` suffix: plain
+`qpgen.vercel.app` belongs to an unrelated project.)
+
+The setup steps below are the general recipe, for reference or a fresh
+environment.
+
 ## Setup
 
 ### 1. Supabase
