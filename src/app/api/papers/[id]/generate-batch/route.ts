@@ -6,6 +6,7 @@ import {
   generateQuestions,
   hasUnresolvedAnswer,
   shuffleMcqOptions,
+  stripSectionPrefix,
   verifyQuestions,
 } from "@/lib/ai/generate";
 import type { Paper, Question } from "@/lib/types";
@@ -75,6 +76,7 @@ export async function POST(
     const newQuestions: Question[] = shuffled.map((raw, i) => {
       const verdict = verification.verdicts.find((v) => v.index === i);
       const unresolved = hasUnresolvedAnswer(raw);
+      const slot = slots[i];
       const reasons = [
         verdict && !verdict.ok ? verdict.reason : null,
         unresolved
@@ -84,15 +86,18 @@ export async function POST(
 
       return {
         id: randomUUID(),
-        type: raw.type,
+        type: slot?.type ?? raw.type,
         difficulty: raw.difficulty,
-        chapter: raw.chapter,
-        question_text: raw.question_text,
+        // In blueprint mode the chapter is dictated by the grid, not the model.
+        chapter: slot?.chapter ?? raw.chapter,
+        question_text: stripSectionPrefix(raw.question_text, slot?.section_name),
         options: raw.options ?? undefined,
         correct_answer: raw.correct_answer,
         solution: raw.solution,
-        marks: paper.settings.marks_per_question,
+        marks: slot?.marks ?? paper.settings.marks_per_question,
         negative_marks: paper.settings.negative_marks,
+        section_id: slot?.section_id,
+        section_name: slot?.section_name,
         needs_review: !verdict || !verdict.ok || unresolved,
         review_reason: reasons.length > 0 ? reasons.join(" ") : undefined,
       };

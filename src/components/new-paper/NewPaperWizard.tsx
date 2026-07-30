@@ -12,10 +12,15 @@ import {
   MAX_REFERENCE_PDF_MB,
   MAX_REFERENCE_PDF_PAGES,
 } from "@/lib/constants";
-import type {
-  InstitutionDetails,
-  PaperSettings,
-  ReferencePage,
+import BlueprintEditor from "./BlueprintEditor";
+import {
+  blueprintQuestionCount,
+  blueprintTotalMarks,
+  sectionGridTotal,
+  type Blueprint,
+  type InstitutionDetails,
+  type PaperSettings,
+  type ReferencePage,
 } from "@/lib/types";
 
 /* ------------------------------------------------------------------ */
@@ -75,8 +80,28 @@ export default function NewPaperWizard({
   const [gen, setGen] = useState<GenPhase>({ phase: "idle" });
   const [stepError, setStepError] = useState("");
 
-  const autoMaxMarks = settings.question_count * settings.marks_per_question;
+  const blueprintMode = settings.mode === "blueprint";
+  const bp = settings.blueprint ?? null;
+
+  const autoMaxMarks =
+    blueprintMode && bp
+      ? blueprintTotalMarks(bp)
+      : settings.question_count * settings.marks_per_question;
   const effectiveMaxMarks = maxMarksTouched ? inst.max_marks : autoMaxMarks;
+
+  function setBlueprint(next: Blueprint) {
+    setSettings({
+      ...settings,
+      blueprint: next,
+      question_count: blueprintQuestionCount(next),
+      chapters: next.rows.map((r) => r.chapter.trim()).filter(Boolean),
+    });
+  }
+
+  function setMode(mode: "simple" | "blueprint") {
+    setStepError("");
+    setSettings({ ...settings, mode });
+  }
 
   const title = useMemo(() => {
     const examLabel =
@@ -103,13 +128,30 @@ export default function NewPaperWizard({
   /* ----------------------------- step validation */
   function validateStep1(): string {
     if (!settings.subject.trim()) return "Please enter a subject.";
-    if (settings.chapters.length === 0)
-      return "Add at least one chapter or topic — questions are generated only from these.";
     if (settings.exam_type === "Custom" && !settings.exam_type_custom?.trim())
       return "Describe your custom exam type (e.g. \"Class 11 unit test\").";
     const d = settings.difficulty;
     if (d.easy_pct + d.medium_pct + d.hard_pct !== 100)
       return "Difficulty percentages must add up to 100.";
+
+    if (blueprintMode) {
+      if (!bp) return "Upload a blueprint, or choose to build one by hand.";
+      if (bp.rows.some((r) => !r.chapter.trim()))
+        return "Every chapter row needs a name (or remove the empty rows).";
+      if (bp.rows.length === 0) return "Add at least one chapter row.";
+      const bad = bp.sections.filter(
+        (s) => sectionGridTotal(bp, s.id) !== s.questions_to_set
+      );
+      if (bad.length > 0)
+        return `${bad
+          .map((s) => s.name)
+          .join(", ")}: the chapter grid doesn't add up to the number of questions set.`;
+      if (blueprintQuestionCount(bp) < 1) return "The blueprint has no questions.";
+      return "";
+    }
+
+    if (settings.chapters.length === 0)
+      return "Add at least one chapter or topic — questions are generated only from these.";
     return "";
   }
   function validateStep2(): string {
@@ -337,7 +379,13 @@ export default function NewPaperWizard({
 
       <div className="card p-6 sm:p-8">
         {step === 1 && (
-          <StepExam settings={settings} setSettings={setSettings} />
+          <StepExam
+            settings={settings}
+            setSettings={setSettings}
+            blueprintMode={blueprintMode}
+            setMode={setMode}
+            setBlueprint={setBlueprint}
+          />
         )}
         {step === 2 && (
           <StepInstitution
@@ -400,11 +448,19 @@ export default function NewPaperWizard({
 function StepExam({
   settings,
   setSettings,
+  blueprintMode,
+  setMode,
+  setBlueprint,
 }: {
   settings: PaperSettings;
   setSettings: (s: PaperSettings) => void;
+  blueprintMode: boolean;
+  setMode: (m: "simple" | "blueprint") => void;
+  setBlueprint: (b: Blueprint) => void;
 }) {
   const [chapterInput, setChapterInput] = useState("");
+  const supportsBlueprint =
+    settings.exam_type === "Board" || settings.exam_type === "Custom";
 
   function addChapter() {
     const parts = chapterInput
@@ -474,6 +530,37 @@ function StepExam({
         </div>
       </div>
 
+      {supportsBlueprint && (
+        <fieldset className="border border-line rounded-lg p-3">
+          <legend className="text-xs text-muted px-1">Paper structure</legend>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={blueprintMode ? "btn-secondary text-xs" : "btn-primary text-xs"}
+              onClick={() => setMode("simple")}
+            >
+              Simple — one question type
+            </button>
+            <button
+              type="button"
+              className={blueprintMode ? "btn-primary text-xs" : "btn-secondary text-xs"}
+              onClick={() => setMode("blueprint")}
+            >
+              Follow a blueprint (Parts A, B, C…)
+            </button>
+          </div>
+          <p className="help mt-2">
+            {blueprintMode
+              ? "Questions follow your board's blueprint: each part gets its own marks, question type and chapter-wise quota."
+              : "All questions share one type and mark value — good for JEE/NEET-style practice papers."}
+          </p>
+        </fieldset>
+      )}
+
+      {blueprintMode ? (
+        <BlueprintEditor blueprint={settings.blueprint ?? null} setBlueprint={setBlueprint} />
+      ) : (
+      <>
       <div>
         <label htmlFor="chapters" className="label">Chapters / topics</label>
         <div className="flex gap-2">
@@ -551,10 +638,15 @@ function StepExam({
             <option value="mcq">MCQ (single correct)</option>
             <option value="numerical">Numerical answer</option>
             <option value="assertion_reason">Assertion–Reason</option>
+            <option value="one_word">One word / fill in the blank</option>
+            <option value="short_answer">Short answer</option>
+            <option value="long_answer">Long answer</option>
             <option value="mixed">Mixed</option>
           </select>
         </div>
       </div>
+      </>
+      )}
 
       <fieldset>
         <legend className="label">Difficulty mix (%)</legend>
@@ -590,33 +682,35 @@ function StepExam({
         </p>
       </fieldset>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label htmlFor="marks" className="label">Marks per question</label>
-          <NumberInput
-            id="marks"
-            min={0.5}
-            max={20}
-            step={0.5}
-            fallback={1}
-            value={settings.marks_per_question}
-            onChange={(n) => setSettings({ ...settings, marks_per_question: n })}
-          />
+      {!blueprintMode && (
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label htmlFor="marks" className="label">Marks per question</label>
+            <NumberInput
+              id="marks"
+              min={0.5}
+              max={20}
+              step={0.5}
+              fallback={1}
+              value={settings.marks_per_question}
+              onChange={(n) => setSettings({ ...settings, marks_per_question: n })}
+            />
+          </div>
+          <div>
+            <label htmlFor="negmarks" className="label">Negative marks</label>
+            <NumberInput
+              id="negmarks"
+              min={0}
+              max={10}
+              step={0.25}
+              fallback={0}
+              value={settings.negative_marks}
+              onChange={(n) => setSettings({ ...settings, negative_marks: n })}
+            />
+            <p className="help">E.g. JEE/NEET pattern is +4 / −1.</p>
+          </div>
         </div>
-        <div>
-          <label htmlFor="negmarks" className="label">Negative marks</label>
-          <NumberInput
-            id="negmarks"
-            min={0}
-            max={10}
-            step={0.25}
-            fallback={0}
-            value={settings.negative_marks}
-            onChange={(n) => setSettings({ ...settings, negative_marks: n })}
-          />
-          <p className="help">E.g. JEE/NEET pattern is +4 / −1.</p>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -847,9 +941,28 @@ function StepReference({
           <dd>{settings.chapters.join(", ") || "—"}</dd>
           <dt className="text-muted">Questions</dt>
           <dd>
-            {settings.question_count} ×{" "}
-            {settings.question_type === "mixed" ? "mixed types" : settings.question_type.replace("_", "–")},{" "}
-            +{settings.marks_per_question}/−{settings.negative_marks}, {maxMarks} marks total
+            {settings.mode === "blueprint" && settings.blueprint ? (
+              <>
+                {settings.question_count} printed across{" "}
+                {settings.blueprint.sections.length} parts (
+                {settings.blueprint.sections
+                  .map(
+                    (s) =>
+                      `${s.name}: ${s.questions_to_answer}/${s.questions_to_set} × ${s.marks_per_question}m`
+                  )
+                  .join(", ")}
+                ), {maxMarks} marks total
+              </>
+            ) : (
+              <>
+                {settings.question_count} ×{" "}
+                {settings.question_type === "mixed"
+                  ? "mixed types"
+                  : settings.question_type.replace("_", " ")}
+                , +{settings.marks_per_question}/−{settings.negative_marks},{" "}
+                {maxMarks} marks total
+              </>
+            )}
           </dd>
           <dt className="text-muted">Difficulty</dt>
           <dd>

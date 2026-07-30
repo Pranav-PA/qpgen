@@ -2,7 +2,40 @@
 // All question/solution text may contain inline LaTeX delimited by $...$.
 
 export type ExamType = "JEE" | "NEET" | "Board" | "Custom";
-export type QuestionType = "mcq" | "numerical" | "assertion_reason";
+
+/**
+ * Objective types carry options; descriptive types (board pattern) are answered
+ * in prose and carry a model answer instead.
+ */
+export type QuestionType =
+  | "mcq"
+  | "numerical"
+  | "assertion_reason"
+  | "one_word"
+  | "short_answer"
+  | "long_answer";
+
+export const OPTION_TYPES: readonly QuestionType[] = ["mcq", "assertion_reason"];
+
+export function hasOptions(type: QuestionType): boolean {
+  return OPTION_TYPES.includes(type);
+}
+
+export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
+  mcq: "MCQ",
+  numerical: "Numerical",
+  assertion_reason: "Assertion–Reason",
+  one_word: "One word / fill in the blank",
+  short_answer: "Short answer",
+  long_answer: "Long answer",
+};
+
+/** Karnataka PUC convention: mark value implies the expected answer length. */
+export function defaultTypeForMarks(marks: number): QuestionType {
+  if (marks <= 1) return "mcq";
+  if (marks <= 3) return "short_answer";
+  return "long_answer";
+}
 export type Difficulty = "easy" | "medium" | "hard";
 export type PaperStatus = "draft" | "finalized";
 export type UserRole = "teacher" | "admin";
@@ -25,6 +58,71 @@ export interface Question {
   review_reason?: string;
   /** True if the teacher wrote/edited this question by hand. */
   teacher_authored?: boolean;
+  /** Blueprint papers only: which part of the paper this question belongs to. */
+  section_id?: string;
+  section_name?: string;
+}
+
+/** One part of a blueprint paper, e.g. "PART-B, 2 marks, answer any 5 of 8". */
+export interface BlueprintSection {
+  id: string;
+  name: string;
+  marks_per_question: number;
+  questions_to_set: number;
+  questions_to_answer: number;
+  question_type: QuestionType;
+  /** Shown under the section heading; auto-worded when left blank. */
+  instruction?: string;
+}
+
+/** A chapter row of the blueprint grid: how many questions it owes each part. */
+export interface BlueprintRow {
+  chapter: string;
+  /** section id -> number of questions from this chapter */
+  counts: Record<string, number>;
+}
+
+export interface Blueprint {
+  sections: BlueprintSection[];
+  rows: BlueprintRow[];
+}
+
+/** Marks a student can actually score (choice-aware). */
+export function blueprintTotalMarks(bp: Blueprint): number {
+  return bp.sections.reduce(
+    (sum, s) => sum + s.questions_to_answer * s.marks_per_question,
+    0
+  );
+}
+
+/** Questions actually printed on the paper. */
+export function blueprintQuestionCount(bp: Blueprint): number {
+  return bp.sections.reduce((sum, s) => sum + s.questions_to_set, 0);
+}
+
+/** How many questions a chapter grid assigns to one section. */
+export function sectionGridTotal(bp: Blueprint, sectionId: string): number {
+  return bp.rows.reduce((sum, r) => sum + (r.counts[sectionId] ?? 0), 0);
+}
+
+const WORDS = [
+  "", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE",
+  "TEN", "ELEVEN", "TWELVE", "THIRTEEN", "FOURTEEN", "FIFTEEN",
+];
+const spell = (n: number) => WORDS[n] ?? String(n);
+
+export function defaultSectionInstruction(s: BlueprintSection): string {
+  const set = s.questions_to_set;
+  const answer = Math.min(s.questions_to_answer, set);
+  const total = answer * s.marks_per_question;
+  const sum = `${answer} × ${s.marks_per_question} = ${total}`;
+
+  if (answer >= set) {
+    return set === 1
+      ? `Answer the following question. (${sum})`
+      : `Answer all ${spell(set)} questions. (${sum})`;
+  }
+  return `Answer any ${spell(answer)} of the following ${spell(set)} questions. (${sum})`;
 }
 
 export interface DifficultySettings {
@@ -57,6 +155,13 @@ export interface PaperSettings {
   negative_marks: number;
   /** Style profile distilled from the teacher's reference PDF, if uploaded. */
   style_notes?: string;
+  /** Absent on papers created before blueprint mode existed — treat as "simple". */
+  mode?: "simple" | "blueprint";
+  blueprint?: Blueprint;
+}
+
+export function isBlueprint(s: PaperSettings): boolean {
+  return s.mode === "blueprint" && !!s.blueprint;
 }
 
 export interface Paper {

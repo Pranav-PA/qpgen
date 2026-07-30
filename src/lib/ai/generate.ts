@@ -1,7 +1,9 @@
 import OpenAI from "openai";
 import { GENERATION_MODEL, VERIFIER_MODEL, estimateCostUsd } from "@/lib/constants";
+import { hasOptions } from "@/lib/types";
 import type { Difficulty, PaperSettings, Question, QuestionType, ReferencePage } from "@/lib/types";
 import {
+  BLUEPRINT_EXTRACTION_PROMPT,
   generationSystemPrompt,
   referenceAnalysisPrompt,
   verifierSystemPrompt,
@@ -17,6 +19,11 @@ export interface Usage {
 export interface BatchSlot {
   type: QuestionType;
   difficulty: Difficulty;
+  /** Blueprint mode pins each slot to one chapter, part and mark value. */
+  chapter?: string;
+  section_id?: string;
+  section_name?: string;
+  marks?: number;
 }
 
 interface RawQuestion {
@@ -67,7 +74,17 @@ const questionsSchema = {
           additionalProperties: false,
           required: ["type", "difficulty", "chapter", "question_text", "options", "correct_answer", "solution"],
           properties: {
-            type: { type: "string", enum: ["mcq", "numerical", "assertion_reason"] },
+            type: {
+              type: "string",
+              enum: [
+                "mcq",
+                "numerical",
+                "assertion_reason",
+                "one_word",
+                "short_answer",
+                "long_answer",
+              ],
+            },
             difficulty: { type: "string", enum: ["easy", "medium", "hard"] },
             chapter: { type: "string" },
             question_text: { type: "string" },
@@ -119,7 +136,13 @@ export async function generateQuestions(opts: {
 
   const { settings, slots, avoid, styleNotes } = opts;
   const composition = slots
-    .map((s, i) => `${i + 1}. ${s.difficulty} ${s.type.replace("_", "-")}`)
+    .map((s, i) => {
+      const bits = [`${i + 1}. ${s.difficulty} ${s.type}`];
+      if (s.marks !== undefined) bits.push(`worth ${s.marks} mark(s)`);
+      if (s.chapter) bits.push(`from the chapter "${s.chapter}"`);
+      if (s.section_name) bits.push(`for ${s.section_name}`);
+      return bits.join(", ");
+    })
     .join("\n");
 
   const userParts: string[] = [
@@ -127,7 +150,7 @@ export async function generateQuestions(opts: {
     `- Exam: ${settings.exam_type === "Custom" ? settings.exam_type_custom : settings.exam_type}`,
     `- Subject: ${settings.subject}`,
     `- Allowed chapters/topics (STRICT — use the exact chapter name in each question's "chapter" field): ${settings.chapters.join("; ")}`,
-    `\nRequired composition (produce them in this order):\n${composition}`,
+    `\nRequired composition (produce them in this order, one question per line item, matching its type, marks and chapter exactly):\n${composition}`,
   ];
   if (styleNotes) {
     userParts.push(`\nStyle profile from the teacher's reference paper — imitate this style and difficulty, but never copy questions:\n${styleNotes}`);
@@ -219,6 +242,122 @@ export async function verifyQuestions(opts: {
 }
 
 /* ------------------------------------------------------------------ */
+/* Blueprint extraction (one vision call)                              */
+
+const blueprintSchema = {
+  name: "exam_blueprint",
+  strict: true as const,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["sections", "rows"],
+    properties: {
+      sections: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id",
+            "name",
+            "marks_per_question",
+            "questions_to_set",
+            "questions_to_answer",
+          ],
+          properties: {
+            id: { type: "string", description: "short slug, e.g. part_a" },
+            name: { type: "string" },
+            marks_per_question: { type: "number" },
+            questions_to_set: { type: "integer" },
+            questions_to_answer: { type: "integer" },
+          },
+        },
+      },
+      rows: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["chapter", "counts"],
+          properties: {
+            chapter: { type: "string" },
+            counts: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["section_id", "count"],
+                properties: {
+                  section_id: { type: "string" },
+                  count: { type: "integer" },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+export interface ExtractedBlueprint {
+  sections: {
+    id: string;
+    name: string;
+    marks_per_question: number;
+    questions_to_set: number;
+    questions_to_answer: number;
+  }[];
+  rows: { chapter: string; counts: { section_id: string; count: number }[] }[];
+}
+
+export async function extractBlueprint(
+  pages: ReferencePage[]
+): Promise<{ blueprint: ExtractedBlueprint; usage: Usage }> {
+  if (isMockAi()) {
+    return {
+      blueprint: {
+        sections: [
+          { id: "part_a", name: "PART-A", marks_per_question: 1, questions_to_set: 4, questions_to_answer: 4 },
+          { id: "part_b", name: "PART-B", marks_per_question: 2, questions_to_set: 3, questions_to_answer: 2 },
+        ],
+        rows: [
+          { chapter: "Electric Charges and Fields", counts: [{ section_id: "part_a", count: 2 }, { section_id: "part_b", count: 2 }] },
+          { chapter: "Current Electricity", counts: [{ section_id: "part_a", count: 2 }, { section_id: "part_b", count: 1 }] },
+        ],
+      },
+      usage: { model: "mock", input_tokens: 0, output_tokens: 0, cost_usd: 0 },
+    };
+  }
+
+  const res = await client().chat.completions.create({
+    model: GENERATION_MODEL,
+    messages: [
+      { role: "system", content: BLUEPRINT_EXTRACTION_PROMPT },
+      {
+        role: "user",
+        content: [
+          { type: "text" as const, text: `Blueprint page(s): ${pages.length}` },
+          ...pages.map((p) => ({
+            type: "image_url" as const,
+            image_url: { url: p.data_url, detail: "high" as const },
+          })),
+        ],
+      },
+    ],
+    response_format: { type: "json_schema", json_schema: blueprintSchema },
+  });
+
+  const content = res.choices[0]?.message?.content;
+  if (!content) throw new Error("The blueprint could not be read.");
+  const parsed = JSON.parse(content) as ExtractedBlueprint;
+  if (!parsed.sections?.length) {
+    throw new Error("No parts/sections were found in that blueprint.");
+  }
+  return { blueprint: parsed, usage: usageFrom(GENERATION_MODEL, res.usage) };
+}
+
+/* ------------------------------------------------------------------ */
 /* Reference PDF analysis (one vision call per paper)                  */
 
 export async function analyzeReference(opts: {
@@ -253,6 +392,34 @@ export async function analyzeReference(opts: {
   const styleNotes = res.choices[0]?.message?.content?.trim();
   if (!styleNotes) throw new Error("Could not read the reference PDF pages.");
   return { styleNotes, usage: usageFrom(GENERATION_MODEL, res.usage) };
+}
+
+/* ------------------------------------------------------------------ */
+/* Clean-up helpers                                                    */
+
+/**
+ * Models sometimes restate the part and marks inside the question itself
+ * ("PART-A (1 mark): ..."), which would print twice since the paper already
+ * has section headings and a marks column. Strip a leading label like that.
+ */
+export function stripSectionPrefix(text: string, sectionName?: string): string {
+  let out = text.trimStart();
+  const patterns: RegExp[] = [
+    /^(PART|SECTION)\s*[-–—]?\s*[A-Z0-9]+\s*(\([^)]*\))?\s*[:.\-–—]\s*/i,
+    /^Q\.?\s*\d+\s*[:.)\-–—]\s*/i,
+    /^\(?\d+\s*marks?\)?\s*[:.\-–—]\s*/i,
+  ];
+  if (sectionName) {
+    const esc = sectionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    patterns.unshift(new RegExp(`^${esc}\\s*(\\([^)]*\\))?\\s*[:.\\-–—]\\s*`, "i"));
+  }
+  // Repeat: a stem can carry both a part label and a marks label.
+  for (let pass = 0; pass < 3; pass++) {
+    const before = out;
+    for (const re of patterns) out = out.replace(re, "").trimStart();
+    if (out === before) break;
+  }
+  return out || text.trim();
 }
 
 /* ------------------------------------------------------------------ */
@@ -300,13 +467,14 @@ export function hasUnresolvedAnswer(q: {
   options?: string[] | null;
   correct_answer: string;
 }): boolean {
-  if (q.type === "numerical") return false;
+  // Descriptive and numerical answers are free text — nothing to resolve.
+  if (!hasOptions(q.type)) return false;
   if (!q.options || q.options.length === 0) return true;
   return !LETTERS.includes(q.correct_answer.trim().toUpperCase());
 }
 
 export function shuffleMcqOptions(raw: RawQuestion): RawQuestion {
-  if (raw.type === "numerical" || !raw.options || raw.options.length !== 4) return raw;
+  if (!hasOptions(raw.type) || !raw.options || raw.options.length !== 4) return raw;
   const correctIdx = resolveCorrectIndex(raw.correct_answer, raw.options);
   if (correctIdx === null || correctIdx < 0) return raw;
 

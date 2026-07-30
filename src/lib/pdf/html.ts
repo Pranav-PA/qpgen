@@ -1,5 +1,6 @@
 import katex from "katex";
-import type { Paper, Question } from "@/lib/types";
+import { groupBySection } from "@/lib/sections";
+import { hasOptions, type Paper, type Question } from "@/lib/types";
 import { fetchImageAsDataUri, katexCss } from "./assets";
 
 const LETTERS = ["A", "B", "C", "D"];
@@ -95,6 +96,13 @@ p.scope { font-size: 10pt; color: #333; margin: 2px 0 0; }
 .opts.two-col { column-count: 2; column-gap: 26px; }
 .opt { margin: 1.5px 0; break-inside: avoid; }
 .opt .lbl { font-weight: bold; }
+.sechead {
+  margin: 14px 0 8px; padding: 4px 0 3px;
+  border-top: 1.2px solid #000; border-bottom: 1.2px solid #000;
+  text-align: center; break-after: avoid; page-break-after: avoid;
+}
+.sechead .secname { font-weight: bold; font-size: 12pt; letter-spacing: .5px; }
+.sechead .secinstr { font-size: 9.5pt; font-style: italic; color: #333; margin-top: 1px; }
 .endnote { text-align: center; font-style: italic; color: #555; font-size: 10pt; margin-top: 22px; }
 .keywarn { font-style: italic; color: #b00; font-size: 10pt; margin: 0 0 10px; }
 h2.sec { font-size: 13pt; margin: 14px 0 6px; }
@@ -106,6 +114,8 @@ h2.sec { font-size: 13pt; margin: 14px 0 6px; }
 .sol { break-inside: avoid; page-break-inside: avoid; margin-bottom: 10px; }
 .sol .head { font-weight: bold; }
 .sol .body { color: #111; }
+.sol .marksk { font-weight: normal; color: #555; font-size: 8.5pt; }
+.help-note { font-size: 10pt; color: #444; font-style: italic; }
 .katex { font-size: 1.02em; }
 .katex-display { margin: 0.3em 0; }
 `;
@@ -129,15 +139,13 @@ function letterheadHtml(paper: Paper, logo: string | null, keyLabel: boolean): s
 }
 
 function questionHtml(q: Question, index: number): string {
-  const hasOptions =
-    (q.type === "mcq" || q.type === "assertion_reason") &&
-    Array.isArray(q.options) &&
-    q.options.length > 0;
+  const showOptions =
+    hasOptions(q.type) && Array.isArray(q.options) && q.options.length > 0;
 
   const compact =
-    hasOptions && q.options!.every((o) => o.replace(/\$/g, "").length < 34);
+    showOptions && q.options!.every((o) => o.replace(/\$/g, "").length < 34);
 
-  const opts = hasOptions
+  const opts = showOptions
     ? `<div class="opts${compact ? " two-col" : ""}">${q
         .options!.map(
           (o, oi) =>
@@ -175,10 +183,24 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
         .join("")}</div>`
     : "";
 
+  const groups = groupBySection(paper)
+    .map((g) => {
+      const head = g.heading
+        ? `<div class="sechead"><div class="secname">${escapeHtml(g.heading)}</div>${
+            g.instruction ? `<div class="secinstr">${escapeHtml(g.instruction)}</div>` : ""
+          }</div>`
+        : "";
+      const qs = g.questions
+        .map((q, i) => questionHtml(q, g.startIndex - 1 + i))
+        .join("");
+      return head + qs;
+    })
+    .join("");
+
   const body = `
     ${letterheadHtml(paper, logo, false)}
     ${instructions}
-    ${paper.questions.map((q, i) => questionHtml(q, i)).join("")}
+    ${groups}
     <p class="endnote">— End of question paper —</p>`;
 
   return shell(paper.title, body);
@@ -187,19 +209,39 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
 export async function answerKeyHtml(paper: Paper): Promise<string> {
   const logo = await fetchImageAsDataUri(paper.institution_details.logo_url);
 
-  const quick = `<div class="answers">${paper.questions
-    .map(
-      (q, i) => `<div><strong>${i + 1}.</strong> ${mathHtml(q.correct_answer)}</div>`
-    )
-    .join("")}</div>`;
+  const groups = groupBySection(paper);
 
-  const solutions = paper.questions
-    .map(
-      (q, i) => `<div class="sol">
-        <div class="head">Q${i + 1} — Answer: ${mathHtml(q.correct_answer)}</div>
-        <div class="body">${mathHtml(q.solution)}</div>
-      </div>`
-    )
+  // Only objective answers belong in the at-a-glance grid; descriptive answers
+  // are paragraphs and would make it unreadable.
+  const quickItems = groups.flatMap((g) =>
+    g.questions
+      .map((q, i) => ({ q, n: g.startIndex + i }))
+      .filter(({ q }) => hasOptions(q.type) || q.type === "numerical")
+  );
+  const quick =
+    quickItems.length > 0
+      ? `<div class="answers">${quickItems
+          .map(
+            ({ q, n }) => `<div><strong>${n}.</strong> ${mathHtml(q.correct_answer)}</div>`
+          )
+          .join("")}</div>`
+      : `<p class="help-note">This paper is entirely descriptive — see the worked solutions below.</p>`;
+
+  const solutions = groups
+    .map((g) => {
+      const head = g.heading
+        ? `<div class="sechead"><div class="secname">${escapeHtml(g.heading)}</div></div>`
+        : "";
+      const items = g.questions
+        .map(
+          (q, i) => `<div class="sol">
+            <div class="head">Q${g.startIndex + i} — Answer: ${mathHtml(q.correct_answer)}<span class="marksk"> [${q.marks} mark${q.marks === 1 ? "" : "s"}]</span></div>
+            <div class="body">${mathHtml(q.solution)}</div>
+          </div>`
+        )
+        .join("");
+      return head + items;
+    })
     .join("");
 
   const body = `

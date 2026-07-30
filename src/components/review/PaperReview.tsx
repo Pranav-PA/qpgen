@@ -1,9 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import MathText from "@/components/MathText";
-import type { Paper, Question } from "@/lib/types";
+import { groupBySection } from "@/lib/sections";
+import {
+  QUESTION_TYPE_LABELS,
+  hasOptions,
+  type Paper,
+  type Question,
+} from "@/lib/types";
 
 const LETTERS = ["A", "B", "C", "D"];
 
@@ -20,6 +26,10 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
 
   const flaggedCount = questions.filter((q) => q.needs_review).length;
   const remaining = paper.settings.question_count - questions.length;
+  const groups = useMemo(
+    () => groupBySection({ ...paper, questions }),
+    [paper, questions]
+  );
 
   function mutate(next: Question[]) {
     setQuestions(next);
@@ -190,19 +200,33 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
       )}
 
       <div className="space-y-4">
-        {questions.map((q, i) => (
-          <QuestionCard
-            key={q.id}
-            index={i}
-            question={q}
-            paperId={paper.id}
-            onChange={(next) => mutate(questions.map((x) => (x.id === q.id ? next : x)))}
-            onDelete={() => mutate(questions.filter((x) => x.id !== q.id))}
-            onReplaced={(next) => {
-              setQuestions((prev) => prev.map((x) => (x.id === q.id ? next : x)));
-              setDirty(false);
-            }}
-          />
+        {groups.map((g, gi) => (
+          <section key={g.heading ?? `g${gi}`} className="space-y-4">
+            {g.heading && (
+              <div className="rounded-lg bg-accent-soft border border-accent/20 px-4 py-2">
+                <h2 className="font-semibold text-accent text-sm">{g.heading}</h2>
+                {g.instruction && (
+                  <p className="text-xs text-accent/80 mt-0.5">{g.instruction}</p>
+                )}
+              </div>
+            )}
+            {g.questions.map((q, i) => (
+              <QuestionCard
+                key={q.id}
+                index={g.startIndex - 1 + i}
+                question={q}
+                paperId={paper.id}
+                onChange={(next) =>
+                  mutate(questions.map((x) => (x.id === q.id ? next : x)))
+                }
+                onDelete={() => mutate(questions.filter((x) => x.id !== q.id))}
+                onReplaced={(next) => {
+                  setQuestions((prev) => prev.map((x) => (x.id === q.id ? next : x)));
+                  setDirty(false);
+                }}
+              />
+            ))}
+          </section>
         ))}
       </div>
 
@@ -301,7 +325,7 @@ function QuestionCard({
   const [reportState, setReportState] = useState<"idle" | "busy" | "done" | "error">("idle");
   const [error, setError] = useState("");
 
-  const isMcqLike = q.type === "mcq" || q.type === "assertion_reason";
+  const isMcqLike = hasOptions(q.type);
 
   async function regenerate() {
     setRegenerating(true);
@@ -348,10 +372,10 @@ function QuestionCard({
           {q.difficulty}
         </span>
         <span className="badge bg-background border border-line text-muted">
-          {q.type === "mcq" ? "MCQ" : q.type === "numerical" ? "Numerical" : "Assertion–Reason"}
+          {QUESTION_TYPE_LABELS[q.type] ?? q.type}
         </span>
         <span className="badge bg-background border border-line text-muted">
-          +{q.marks}/−{q.negative_marks}
+          {q.negative_marks > 0 ? `+${q.marks}/−${q.negative_marks}` : `${q.marks} mark${q.marks === 1 ? "" : "s"}`}
         </span>
         {q.teacher_authored && (
           <span className="badge bg-accent-soft text-accent">Your question</span>
@@ -426,7 +450,9 @@ function QuestionCard({
             ))}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="label text-xs" htmlFor={`ca-${q.id}`}>Correct answer</label>
+              <label className="label text-xs" htmlFor={`ca-${q.id}`}>
+                {isMcqLike ? "Correct option" : "Expected answer"}
+              </label>
               {isMcqLike ? (
                 <select
                   id={`ca-${q.id}`}
@@ -461,7 +487,9 @@ function QuestionCard({
             </div>
           </div>
           <div>
-            <label className="label text-xs" htmlFor={`sol-${q.id}`}>Solution / explanation</label>
+            <label className="label text-xs" htmlFor={`sol-${q.id}`}>
+              {isMcqLike ? "Solution / explanation" : "Model answer / marking scheme"}
+            </label>
             <textarea
               id={`sol-${q.id}`}
               rows={4}

@@ -7,6 +7,7 @@ import {
   generateQuestions,
   hasUnresolvedAnswer,
   shuffleMcqOptions,
+  stripSectionPrefix,
   verifyQuestions,
 } from "@/lib/ai/generate";
 import type { Paper, Question } from "@/lib/types";
@@ -45,7 +46,17 @@ export async function POST(
   try {
     const gen = await generateQuestions({
       settings: paper.settings,
-      slots: [{ type: old.type, difficulty: old.difficulty }],
+      slots: [
+        {
+          type: old.type,
+          difficulty: old.difficulty,
+          // Keep a regenerated question in its original part and chapter.
+          chapter: paper.settings.mode === "blueprint" ? old.chapter : undefined,
+          section_id: old.section_id,
+          section_name: old.section_name,
+          marks: old.marks,
+        },
+      ],
       // The old question goes on the avoid-list so we get something new.
       avoid: toAvoidList(paper.questions, 60),
       styleNotes: paper.settings.style_notes ?? null,
@@ -68,10 +79,12 @@ export async function POST(
 
     const replacement: Question = {
       id: randomUUID(),
-      type: raw.type,
+      type: old.type,
       difficulty: raw.difficulty,
-      chapter: raw.chapter,
-      question_text: raw.question_text,
+      chapter: paper.settings.mode === "blueprint" ? old.chapter : raw.chapter,
+      section_id: old.section_id,
+      section_name: old.section_name,
+      question_text: stripSectionPrefix(raw.question_text, old.section_name),
       options: raw.options ?? undefined,
       correct_answer: raw.correct_answer,
       solution: raw.solution,

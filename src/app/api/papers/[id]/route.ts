@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getApiUser, jsonError } from "@/lib/api";
-import { institutionSchema } from "@/lib/schemas";
+import { institutionSchema, questionTypeSchema } from "@/lib/schemas";
 
 const questionSchema = z.object({
   id: z.string().min(1),
-  type: z.enum(["mcq", "numerical", "assertion_reason"]),
+  type: questionTypeSchema,
   difficulty: z.enum(["easy", "medium", "hard"]),
   chapter: z.string().max(300),
   question_text: z.string().trim().min(3).max(6000),
@@ -17,6 +17,8 @@ const questionSchema = z.object({
   needs_review: z.boolean(),
   review_reason: z.string().max(2000).optional(),
   teacher_authored: z.boolean().optional(),
+  section_id: z.string().max(40).optional(),
+  section_name: z.string().max(40).optional(),
 });
 
 const patchSchema = z.object({

@@ -2,7 +2,11 @@
 // OpenAI renames/retires models; defaults reflect the GPT-5.6 lineup (July 2026).
 
 export const MAX_QUESTIONS_PER_PAPER = 50;
+/** Blueprint papers print every question including choice extras (45+ is normal). */
+export const MAX_QUESTIONS_BLUEPRINT = 80;
 export const MIN_QUESTIONS_PER_PAPER = 1;
+export const MAX_BLUEPRINT_SECTIONS = 8;
+export const MAX_BLUEPRINT_PAGES = 4;
 export const GENERATION_BATCH_SIZE = 6;
 export const MAX_REFERENCE_PDF_PAGES = 10;
 export const MAX_REFERENCE_PDF_MB = 20;
