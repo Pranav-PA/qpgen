@@ -28,6 +28,20 @@ function slug(s: string, i: number): string {
   return base || `part_${i + 1}`;
 }
 
+/**
+ * Blueprints print the mark value inside the column header ("PART-B 2 MARKS"),
+ * but the paper shows marks in the instruction line underneath — keeping it in
+ * the name would print it twice.
+ */
+function cleanSectionName(name: string, i: number): string {
+  const trimmed = (name || "").trim();
+  const stripped = trimmed
+    .replace(/[\s,–—-]*\(?\s*\d+(\.\d+)?\s*marks?\s*(questions?)?\s*\)?\s*$/i, "")
+    .replace(/[\s,–—-]*\d+\s*marks?\s*(each)?\s*$/i, "")
+    .trim();
+  return (stripped || trimmed || `Part ${i + 1}`).slice(0, 40);
+}
+
 export async function POST(request: Request) {
   const ctx = await getApiUser();
   if ("error" in ctx) return ctx.error;
@@ -56,7 +70,7 @@ export async function POST(request: Request) {
       const marks = Math.max(0.5, Number(s.marks_per_question) || 1);
       return {
         id: slug(s.id || s.name || "", i),
-        name: (s.name || `Part ${i + 1}`).trim().slice(0, 40),
+        name: cleanSectionName(s.name, i),
         marks_per_question: marks,
         questions_to_set: set,
         questions_to_answer: answer,
