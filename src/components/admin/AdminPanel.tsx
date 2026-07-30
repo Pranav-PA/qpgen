@@ -42,6 +42,11 @@ export interface AdminData {
     ai_provider: "google" | "openai";
   };
   models: { google: string[]; openai: string[] };
+  providerStatus: {
+    resolved: "google" | "openai";
+    google_key: boolean;
+    openai_key: boolean;
+  };
 }
 
 async function post(path: string, body: unknown): Promise<boolean> {
@@ -110,7 +115,12 @@ export default function AdminPanel({ data }: { data: AdminData }) {
       </section>
 
       {/* Limits */}
-      <ConfigSection config={data.config} models={data.models} onDone={done} />
+      <ConfigSection
+        config={data.config}
+        models={data.models}
+        status={data.providerStatus}
+        onDone={done}
+      />
 
       {/* Reports */}
       <section className="card p-5" aria-label="Reported questions">
@@ -220,10 +230,12 @@ export default function AdminPanel({ data }: { data: AdminData }) {
 function ConfigSection({
   config,
   models,
+  status,
   onDone,
 }: {
   config: AdminData["config"];
   models: AdminData["models"];
+  status: AdminData["providerStatus"];
   onDone: (ok: boolean) => void;
 }) {
   const [globalCap, setGlobalCap] = useState(config.global_daily_cap);
@@ -254,6 +266,30 @@ function ConfigSection({
           generation; papers already being generated finish on their current
           provider.
         </p>
+      </div>
+
+      <div className="text-xs mb-6 flex flex-wrap gap-x-5 gap-y-1">
+        <span>
+          Google key:{" "}
+          <strong className={status.google_key ? "text-ok" : "text-danger"}>
+            {status.google_key ? "configured" : "missing"}
+          </strong>
+        </span>
+        <span>
+          OpenAI key:{" "}
+          <strong className={status.openai_key ? "text-ok" : "text-danger"}>
+            {status.openai_key ? "configured" : "missing"}
+          </strong>
+        </span>
+        <span>
+          Actually in use:{" "}
+          <strong>{status.resolved === "google" ? "Google Gemini" : "OpenAI"}</strong>
+        </span>
+        {status.resolved !== config.ai_provider && (
+          <span className="text-warn">
+            ⚠ Falling back because the selected provider&apos;s key is missing.
+          </span>
+        )}
       </div>
 
       <h2 className="font-semibold text-sm mb-3 border-t border-line pt-4">Abuse protection</h2>

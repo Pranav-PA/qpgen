@@ -1,4 +1,5 @@
 import { requireAdmin } from "@/lib/auth";
+import { getAiProvider } from "@/lib/api";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   DEFAULT_AI_PROVIDER,
@@ -118,6 +119,13 @@ export default async function AdminPage() {
     models: {
       google: [GEMINI_GENERATION_MODEL, GEMINI_VERIFIER_MODEL],
       openai: [GENERATION_MODEL, VERIFIER_MODEL],
+    },
+    // Whether each key actually reaches the server, and which provider the
+    // next generation will really use after key-availability fallback.
+    providerStatus: {
+      resolved: await getAiProvider(),
+      google_key: !!process.env.GOOGLE_API_KEY,
+      openai_key: !!process.env.OPENAI_API_KEY,
     },
   };
 
