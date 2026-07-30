@@ -13,9 +13,16 @@ question paper and answer key always as **separate** files.
   "⚠ Needs review" flag — nothing is silently wrong.
 - **Batched generation**: papers generate in batches of 6 questions so serverless
   time limits are never hit; a partial failure is resumable from the paper page.
-- **Real math everywhere**: questions are stored with inline LaTeX, rendered by
-  KaTeX on screen and in the print view, and converted to native Word equations
-  (LaTeX → MathML → OMML) in DOCX exports.
+- **Board blueprints**: for Board/Custom papers you can upload your board's
+  blueprint image or PDF. A vision call reads the parts and the chapter-by-part
+  grid; the paper then prints in the official pattern (PART-A/B/C/D with their
+  own instruction lines, optional sub-groups such as "I. Pick the correct
+  option" / "II. Fill in the blanks", and continuous numbering).
+- **Real math everywhere**: questions are stored with inline LaTeX and rendered
+  by KaTeX, with the fonts embedded directly into the exported PDF.
+- **Switchable AI backend**: Google Gemini by default (`gemini-3.6-flash` to
+  write, `gemini-3.5-flash-lite` to verify) with OpenAI as an alternative you
+  can select from the admin panel.
 - **Reference PDFs are never stored**: pages are rendered to images in the browser
   (PDF.js), summarized into a style profile by one vision call, and discarded.
 - **Abuse protection**: per-user daily caps, a global daily cap, an admin kill
@@ -63,7 +70,10 @@ Copy `.env.example` to `.env.local` and fill in:
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → Settings → API |
 | `SUPABASE_SERVICE_ROLE_KEY` | same page — **server-only, never expose** |
-| `OPENAI_API_KEY` | platform.openai.com |
+| `GOOGLE_API_KEY` | aistudio.google.com — the default provider |
+| `OPENAI_API_KEY` | platform.openai.com — optional alternative |
+| `AI_PROVIDER` | optional; `google` (default) or `openai`, overridden by the admin panel |
+| `GEMINI_GENERATION_MODEL` / `GEMINI_VERIFIER_MODEL` | optional; defaults `gemini-3.6-flash` / `gemini-3.5-flash-lite` |
 | `OPENAI_GENERATION_MODEL` / `OPENAI_VERIFIER_MODEL` | optional; defaults `gpt-5.6-terra` / `gpt-5.6-luna` |
 | `NEXT_PUBLIC_TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | optional captcha |
 | `MOCK_AI=true` | optional: run the full flow with free mock questions (no OpenAI key needed) |
