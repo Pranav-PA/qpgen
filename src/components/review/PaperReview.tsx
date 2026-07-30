@@ -16,6 +16,7 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [continuing, setContinuing] = useState(false);
+  const [busyExport, setBusyExport] = useState<string | null>(null);
 
   const flaggedCount = questions.filter((q) => q.needs_review).length;
   const remaining = paper.settings.question_count - questions.length;
@@ -50,8 +51,48 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
   }
 
   async function openExport(path: string) {
+    // Opened synchronously where possible; a save first would cost the popup
+    // its user-gesture context, so open the tab up front and point it after.
+    const tab = window.open("", "_blank");
+    if (dirty && !(await save())) {
+      tab?.close();
+      return;
+    }
+    if (tab) tab.location.href = path;
+    else window.location.href = path;
+  }
+
+  /**
+   * Fetch the export as a blob and save it. Going through fetch (rather than a
+   * plain link) lets us show progress for slow server-side PDF rendering and
+   * surface the API's error message instead of dumping JSON into a tab.
+   */
+  async function download(path: string, filename: string) {
     if (dirty && !(await save())) return;
-    window.open(path, "_blank");
+    const kind = path.includes("export-pdf") ? "pdf" : "docx";
+    const doc = path.includes("doc=key") ? "key" : "paper";
+    setBusyExport(`${kind}-${doc}`);
+    setNotice("");
+    try {
+      const res = await fetch(path);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "The export failed. Please try again.");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename.replace(/[\\/:*?"<>|]/g, "");
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "The export failed.");
+    } finally {
+      setBusyExport(null);
+    }
   }
 
   async function continueGeneration() {
@@ -179,29 +220,57 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
           Unsaved edits are saved automatically before export.
         </p>
         <div className="grid sm:grid-cols-2 gap-4">
-          <div className="border border-line rounded-lg p-4">
-            <h3 className="text-sm font-semibold mb-2">📄 Question paper <span className="text-muted font-normal">(for students)</span></h3>
-            <div className="flex gap-2">
-              <button className="btn-primary text-xs" onClick={() => openExport(`/papers/${paper.id}/print`)}>
-                Print / PDF
-              </button>
-              <button className="btn-secondary text-xs" onClick={() => openExport(`/api/papers/${paper.id}/export?doc=paper`)}>
-                Word (.docx)
-              </button>
+          {(
+            [
+              ["paper", "📄 Question paper", "(for students)", `/papers/${paper.id}/print`],
+              ["key", "🔑 Answer key", "(for you)", `/papers/${paper.id}/print-key`],
+            ] as const
+          ).map(([doc, heading, who, printPath]) => (
+            <div key={doc} className="border border-line rounded-lg p-4">
+              <h3 className="text-sm font-semibold mb-2">
+                {heading} <span className="text-muted font-normal">{who}</span>
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className="btn-primary text-xs"
+                  disabled={busyExport !== null}
+                  onClick={() =>
+                    download(
+                      `/api/papers/${paper.id}/export-pdf?doc=${doc}`,
+                      `${paper.title} - ${doc === "paper" ? "Question Paper" : "ANSWER KEY"}.pdf`
+                    )
+                  }
+                >
+                  {busyExport === `pdf-${doc}` ? "Preparing PDF…" : "⬇ Download PDF"}
+                </button>
+                <button
+                  className="btn-secondary text-xs"
+                  disabled={busyExport !== null}
+                  onClick={() =>
+                    download(
+                      `/api/papers/${paper.id}/export?doc=${doc}`,
+                      `${paper.title} - ${doc === "paper" ? "Question Paper" : "ANSWER KEY"}.docx`
+                    )
+                  }
+                >
+                  {busyExport === `docx-${doc}` ? "Preparing…" : "⬇ Word (.docx)"}
+                </button>
+                <button
+                  className="btn-secondary text-xs"
+                  disabled={busyExport !== null}
+                  onClick={() => openExport(printPath)}
+                  title="Open a print-ready view in a new tab"
+                >
+                  🖨 Print
+                </button>
+              </div>
             </div>
-          </div>
-          <div className="border border-line rounded-lg p-4">
-            <h3 className="text-sm font-semibold mb-2">🔑 Answer key <span className="text-muted font-normal">(for you)</span></h3>
-            <div className="flex gap-2">
-              <button className="btn-primary text-xs" onClick={() => openExport(`/papers/${paper.id}/print-key`)}>
-                Print / PDF
-              </button>
-              <button className="btn-secondary text-xs" onClick={() => openExport(`/api/papers/${paper.id}/export?doc=key`)}>
-                Word (.docx)
-              </button>
-            </div>
-          </div>
+          ))}
         </div>
+        <p className="help mt-3">
+          PDFs are rendered on the server with full equation formatting; the
+          first one after a while can take a few seconds.
+        </p>
       </div>
     </div>
   );
