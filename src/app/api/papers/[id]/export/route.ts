@@ -35,7 +35,9 @@ export async function GET(
 
   try {
     const document =
-      doc === "paper" ? buildQuestionPaperDocx(paper) : buildAnswerKeyDocx(paper);
+      doc === "paper"
+        ? await buildQuestionPaperDocx(paper)
+        : await buildAnswerKeyDocx(paper);
     const buffer = await Packer.toBuffer(document);
     await logUsage({ user_id: user.id, action: "export" });
 

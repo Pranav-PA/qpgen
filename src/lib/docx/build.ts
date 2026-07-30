@@ -2,6 +2,7 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
+  ImageRun,
   Paragraph,
   Table,
   TableCell,
@@ -10,6 +11,7 @@ import {
   WidthType,
 } from "docx";
 import type { Paper, Question } from "@/lib/types";
+import { fetchLogo, type LogoAsset } from "./image";
 import { textWithMathRuns } from "./math";
 
 const LETTERS = ["A", "B", "C", "D"];
@@ -27,7 +29,11 @@ function fmtDate(iso: string): string {
   }
 }
 
-function letterhead(paper: Paper, docLabel?: string): Paragraph[] {
+function letterhead(
+  paper: Paper,
+  logo: LogoAsset | null,
+  docLabel?: string
+): Paragraph[] {
   const inst = paper.institution_details;
   const meta: string[] = [];
   if (inst.exam_date) meta.push(`Date: ${fmtDate(inst.exam_date)}`);
@@ -35,12 +41,30 @@ function letterhead(paper: Paper, docLabel?: string): Paragraph[] {
   meta.push(`Duration: ${inst.duration_minutes} minutes`);
   meta.push(`Maximum marks: ${inst.max_marks}`);
 
-  const out: Paragraph[] = [
+  const out: Paragraph[] = [];
+
+  if (logo) {
+    out.push(
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 60 },
+        children: [
+          new ImageRun({
+            data: logo.data,
+            type: logo.type,
+            transformation: { width: logo.width, height: logo.height },
+          }),
+        ],
+      })
+    );
+  }
+
+  out.push(
     new Paragraph({
       alignment: AlignmentType.CENTER,
       children: [new TextRun({ text: inst.name, bold: true, size: 32 })],
-    }),
-  ];
+    })
+  );
   if (inst.address) {
     out.push(
       new Paragraph({
@@ -112,9 +136,10 @@ function questionBlock(q: Question, index: number, withMarks: boolean): Paragrap
   return out;
 }
 
-export function buildQuestionPaperDocx(paper: Paper): Document {
+export async function buildQuestionPaperDocx(paper: Paper): Promise<Document> {
   const inst = paper.institution_details;
-  const children: (Paragraph | Table)[] = [...letterhead(paper)];
+  const logo = await fetchLogo(inst.logo_url);
+  const children: (Paragraph | Table)[] = [...letterhead(paper, logo)];
 
   if (inst.instructions.trim()) {
     children.push(
@@ -152,8 +177,11 @@ export function buildQuestionPaperDocx(paper: Paper): Document {
   });
 }
 
-export function buildAnswerKeyDocx(paper: Paper): Document {
-  const children: (Paragraph | Table)[] = [...letterhead(paper, "ANSWER KEY")];
+export async function buildAnswerKeyDocx(paper: Paper): Promise<Document> {
+  const logo = await fetchLogo(paper.institution_details.logo_url);
+  const children: (Paragraph | Table)[] = [
+    ...letterhead(paper, logo, "ANSWER KEY"),
+  ];
 
   children.push(
     new Paragraph({

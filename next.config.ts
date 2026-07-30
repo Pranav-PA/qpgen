@@ -8,6 +8,9 @@ const nextConfig: NextConfig = {
     "/api/papers/[id]/export-pdf": [
       "./node_modules/katex/dist/katex.min.css",
       "./node_modules/katex/dist/fonts/**",
+      // The brotli-packed Chromium build (~67 MB) is loaded from disk at
+      // runtime; tracing cannot infer it because the path is built dynamically.
+      "./node_modules/@sparticuz/chromium/bin/**",
     ],
   },
 };

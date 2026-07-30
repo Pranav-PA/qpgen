@@ -4,6 +4,23 @@ import { mml2omml } from "mathml2omml";
 
 type Run = TextRun | ImportedXmlComponent;
 
+/**
+ * `ImportedXmlComponent.fromXmlString` parses the string into an xml-js
+ * *document* node, which has no element name, and wraps the real content in a
+ * component named `undefined`. That serialises to a literal `<undefined>` tag,
+ * which is invalid WordprocessingML — Word discards the run, so any option or
+ * stem that is pure math renders blank. Unwrap to the real `m:oMath` element.
+ */
+function unwrapImported(
+  wrapper: ImportedXmlComponent
+): ImportedXmlComponent | null {
+  const children = (wrapper as unknown as { root?: unknown[] }).root;
+  const first = Array.isArray(children) ? children[0] : undefined;
+  return first && typeof first === "object"
+    ? (first as ImportedXmlComponent)
+    : null;
+}
+
 /** Convert one LaTeX expression to a native Word (OMML) equation run. */
 function latexToOmml(latex: string): ImportedXmlComponent | null {
   try {
@@ -11,7 +28,7 @@ function latexToOmml(latex: string): ImportedXmlComponent | null {
     if (!mathml.startsWith("<math")) return null;
     const omml = mml2omml(mathml);
     if (!omml) return null;
-    return ImportedXmlComponent.fromXmlString(String(omml));
+    return unwrapImported(ImportedXmlComponent.fromXmlString(String(omml)));
   } catch {
     return null;
   }
