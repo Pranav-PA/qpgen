@@ -1,5 +1,6 @@
 import { hasOptions } from "@/lib/types";
 import type { Difficulty, PaperSettings, Question, QuestionType, ReferencePage } from "@/lib/types";
+import { repairMisescapedLatex } from "@/lib/text-repair";
 import { runAi, type ProviderName, type Usage } from "./providers";
 import {
   BLUEPRINT_EXTRACTION_PROMPT,
@@ -189,8 +190,17 @@ function normalizeRaw(raw: RawQuestion): RawQuestion {
   return { ...raw, options: stripOptionLabels(raw.options) };
 }
 
-/** Models occasionally wrap JSON in prose or a fenced block. */
+/**
+ * Models occasionally wrap JSON in prose or a fenced block. Everything that
+ * survives parsing also goes through the LaTeX repair pass, because a single
+ * un-doubled backslash (\frac, \theta, \rho, \beta) is *valid* JSON and decodes
+ * silently into a control character.
+ */
 function parseJson<T>(text: string): T | null {
+  return repairMisescapedLatex(parseJsonRaw<T>(text));
+}
+
+function parseJsonRaw<T>(text: string): T | null {
   const trimmed = text.trim();
   try {
     return JSON.parse(trimmed) as T;

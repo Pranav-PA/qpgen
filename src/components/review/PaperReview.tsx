@@ -36,21 +36,24 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
     setDirty(true);
   }
 
-  async function save(): Promise<boolean> {
+  async function save(
+    override?: { questions?: Question[]; quiet?: boolean }
+  ): Promise<boolean> {
+    const payloadQuestions = override?.questions ?? questions;
     setSaving(true);
-    setNotice("");
+    if (!override?.quiet) setNotice("");
     try {
       const res = await fetch(`/api/papers/${paper.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, questions }),
+        body: JSON.stringify({ title, questions: payloadQuestions }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || "Save failed.");
       }
       setDirty(false);
-      setNotice("Saved.");
+      if (!override?.quiet) setNotice("Saved.");
       return true;
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Save failed.");
@@ -60,14 +63,37 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
     }
   }
 
+  /**
+   * Clearing a verifier flag persists immediately. Left as a local-only edit it
+   * looked dismissed but reappeared on the next load, so the paper seemed
+   * permanently stuck with questions "to review".
+   */
+  function resolveFlag(id: string) {
+    const next = questions.map((x) =>
+      x.id === id ? { ...x, needs_review: false, review_reason: undefined } : x
+    );
+    setQuestions(next);
+    void save({ questions: next, quiet: true });
+  }
+
   const pdfUrl = (doc: "paper" | "key") =>
     `/api/papers/${paper.id}/export-pdf?doc=${doc}`;
 
+  /**
+   * Downloading is never gated on review flags — flags are advice to the
+   * teacher, not a lock. Unsaved edits are flushed first so the PDF matches
+   * what is on screen, but a failed save still lets the download proceed with
+   * the last saved version rather than blocking it.
+   */
   async function saveThenDownload(doc: "paper" | "key") {
     setBusyExport(doc);
     try {
-      if (!(await save())) return;
-      setNotice("Preparing your PDF — the download starts in a few seconds.");
+      const saved = await save({ quiet: true });
+      setNotice(
+        saved
+          ? "Preparing your PDF — the download starts in a few seconds."
+          : "Couldn't save your latest edits, so the PDF uses the last saved version."
+      );
       // Top-level navigation to an attachment downloads without navigating away.
       window.location.href = pdfUrl(doc);
     } finally {
@@ -128,7 +154,15 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
             distributing to students. AI-generated content can contain mistakes —
             you are the final check.
             {flaggedCount > 0 && (
-              <> <strong>{flaggedCount} question{flaggedCount > 1 ? "s were" : " was"} flagged by the automatic verifier</strong> and needs your attention.</>
+              <>
+                {" "}
+                <strong>
+                  {flaggedCount} question{flaggedCount > 1 ? "s are" : " is"} flagged
+                  by the automatic verifier
+                </strong>{" "}
+                — worth a second look. Flags never block exporting; you can
+                download whenever you like.
+              </>
             )}
           </span>
         </div>
@@ -144,7 +178,7 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
             setDirty(true);
           }}
         />
-        <button className="btn-primary" onClick={save} disabled={saving || !dirty}>
+        <button className="btn-primary" onClick={() => void save()} disabled={saving || !dirty}>
           {saving ? "Saving…" : dirty ? "Save changes" : "Saved ✓"}
         </button>
       </div>
@@ -189,6 +223,7 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
                 onChange={(next) =>
                   mutate(questions.map((x) => (x.id === q.id ? next : x)))
                 }
+                onResolveFlag={() => resolveFlag(q.id)}
                 onDelete={() => mutate(questions.filter((x) => x.id !== q.id))}
                 onReplaced={(next) => {
                   setQuestions((prev) => prev.map((x) => (x.id === q.id ? next : x)));
@@ -237,7 +272,7 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
                   disabled={busyExport !== null}
                   onClick={() => saveThenDownload(doc)}
                 >
-                  {busyExport === doc ? "Saving…" : "⬇ Save & download PDF"}
+                  {busyExport === doc ? "Preparing…" : "⬇ Download PDF"}
                 </button>
               ) : (
                 <a
@@ -270,6 +305,7 @@ function QuestionCard({
   question: q,
   paperId,
   onChange,
+  onResolveFlag,
   onDelete,
   onReplaced,
 }: {
@@ -277,6 +313,7 @@ function QuestionCard({
   question: Question;
   paperId: string;
   onChange: (q: Question) => void;
+  onResolveFlag: () => void;
   onDelete: () => void;
   onReplaced: (q: Question) => void;
 }) {
@@ -372,10 +409,7 @@ function QuestionCard({
       {q.needs_review && q.review_reason && (
         <p className="text-xs text-warn bg-warn-soft border border-warn/30 rounded-lg px-3 py-2 mb-3">
           <strong>Verifier note:</strong> {q.review_reason}{" "}
-          <button
-            className="underline"
-            onClick={() => onChange({ ...q, needs_review: false, review_reason: undefined })}
-          >
+          <button className="underline font-medium" onClick={onResolveFlag}>
             Mark as checked
           </button>
         </p>

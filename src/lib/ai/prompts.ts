@@ -9,7 +9,9 @@ export function examLabel(settings: PaperSettings): string {
 const LATEX_RULES = `LaTeX rules:
 - Write ALL mathematical/chemical expressions as inline LaTeX delimited by $...$, e.g. $v = u + at$, $\\frac{1}{2}mv^2$, $H_2SO_4$ (chemistry uses subscripts/superscripts in math mode).
 - Never use display math ($$...$$), \\[ \\], or markdown formatting.
-- Plain prose stays outside the dollar signs.`;
+- Plain prose stays outside the dollar signs.
+- JSON ESCAPING (critical): every backslash in a LaTeX command must be escaped as a double backslash in the JSON string. Write "$\\\\frac{F}{2}$", "$\\\\theta$", "$\\\\rho$", "$\\\\beta$" — never "$\\frac{F}{2}$". A single backslash before b, f, n, r, t or u is read as a JSON control character and destroys the formula.
+- Prefer the degree symbol ° directly (e.g. $45°$) rather than a superscript-circ construction.`;
 
 const SELF_CONTAINED_RULES = `Self-containment rules (critical):
 - Questions must be fully answerable from their text alone.
