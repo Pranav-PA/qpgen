@@ -63,6 +63,17 @@ export interface Question {
   section_name?: string;
 }
 
+/**
+ * A run of questions inside a part that share a style, e.g. Karnataka's
+ * PART-A splits into "I. Pick the correct option" then "II. Fill in the blanks".
+ */
+export interface BlueprintSubGroup {
+  id: string;
+  label: string;
+  question_type: QuestionType;
+  count: number;
+}
+
 /** One part of a blueprint paper, e.g. "PART-B, 2 marks, answer any 5 of 8". */
 export interface BlueprintSection {
   id: string;
@@ -73,6 +84,41 @@ export interface BlueprintSection {
   question_type: QuestionType;
   /** Shown under the section heading; auto-worded when left blank. */
   instruction?: string;
+  /** When present, splits the part into labelled runs of different types. */
+  subgroups?: BlueprintSubGroup[];
+}
+
+/** Question types for each printed slot of a part, honouring any sub-groups. */
+export function sectionSlotTypes(s: BlueprintSection): QuestionType[] {
+  const groups = s.subgroups ?? [];
+  if (groups.length === 0) {
+    return Array<QuestionType>(s.questions_to_set).fill(s.question_type);
+  }
+  const out: QuestionType[] = [];
+  for (const g of groups) {
+    for (let i = 0; i < g.count; i++) out.push(g.question_type);
+  }
+  // Pad or trim if the sub-group counts drift from the part's total.
+  while (out.length < s.questions_to_set) out.push(s.question_type);
+  return out.slice(0, s.questions_to_set);
+}
+
+/** Sub-group label for the nth (0-based) question of a part, if it starts one. */
+export function subGroupStartingAt(
+  s: BlueprintSection,
+  offset: number
+): BlueprintSubGroup | null {
+  const groups = s.subgroups ?? [];
+  let at = 0;
+  for (const g of groups) {
+    if (at === offset) return g;
+    at += g.count;
+  }
+  return null;
+}
+
+export function subGroupTotal(s: BlueprintSection): number {
+  return (s.subgroups ?? []).reduce((t, g) => t + g.count, 0);
 }
 
 /** A chapter row of the blueprint grid: how many questions it owes each part. */

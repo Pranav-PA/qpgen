@@ -39,7 +39,9 @@ export interface AdminData {
     global_daily_cap: number;
     default_user_daily_cap: number;
     generation_paused: boolean;
+    ai_provider: "google" | "openai";
   };
+  models: { google: string[]; openai: string[] };
 }
 
 async function post(path: string, body: unknown): Promise<boolean> {
@@ -108,7 +110,7 @@ export default function AdminPanel({ data }: { data: AdminData }) {
       </section>
 
       {/* Limits */}
-      <ConfigSection config={data.config} onDone={done} />
+      <ConfigSection config={data.config} models={data.models} onDone={done} />
 
       {/* Reports */}
       <section className="card p-5" aria-label="Reported questions">
@@ -217,19 +219,44 @@ export default function AdminPanel({ data }: { data: AdminData }) {
 
 function ConfigSection({
   config,
+  models,
   onDone,
 }: {
   config: AdminData["config"];
+  models: AdminData["models"];
   onDone: (ok: boolean) => void;
 }) {
   const [globalCap, setGlobalCap] = useState(config.global_daily_cap);
   const [userCap, setUserCap] = useState(config.default_user_daily_cap);
   const [paused, setPaused] = useState(config.generation_paused);
+  const [provider, setProvider] = useState(config.ai_provider);
   const [busy, setBusy] = useState(false);
 
   return (
     <section className="card p-5" aria-label="Limits">
-      <h2 className="font-semibold text-sm mb-3">Abuse protection</h2>
+      <h2 className="font-semibold text-sm mb-3">AI provider</h2>
+      <div className="flex flex-wrap items-end gap-4 mb-6">
+        <div>
+          <label htmlFor="provider" className="label text-xs">Provider used for generation</label>
+          <select
+            id="provider"
+            className="input w-56"
+            value={provider}
+            onChange={(e) => setProvider(e.target.value as "google" | "openai")}
+          >
+            <option value="google">Google Gemini</option>
+            <option value="openai">OpenAI</option>
+          </select>
+        </div>
+        <p className="text-xs text-muted pb-2">
+          Writes with <code>{models[provider][0]}</code>, verifies with{" "}
+          <code>{models[provider][1]}</code>. Takes effect on the next
+          generation; papers already being generated finish on their current
+          provider.
+        </p>
+      </div>
+
+      <h2 className="font-semibold text-sm mb-3 border-t border-line pt-4">Abuse protection</h2>
       <div className="flex flex-wrap items-end gap-4">
         <div>
           <label htmlFor="gcap" className="label text-xs">Global daily batch cap</label>
@@ -253,6 +280,7 @@ function ConfigSection({
                 global_daily_cap: globalCap,
                 default_user_daily_cap: userCap,
                 generation_paused: paused,
+                ai_provider: provider,
               })
             );
             setBusy(false);

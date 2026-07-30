@@ -1,7 +1,6 @@
-import OpenAI from "openai";
-import { GENERATION_MODEL, VERIFIER_MODEL, estimateCostUsd } from "@/lib/constants";
 import { hasOptions } from "@/lib/types";
 import type { Difficulty, PaperSettings, Question, QuestionType, ReferencePage } from "@/lib/types";
+import { runAi, type ProviderName, type Usage } from "./providers";
 import {
   BLUEPRINT_EXTRACTION_PROMPT,
   generationSystemPrompt,
@@ -9,12 +8,7 @@ import {
   verifierSystemPrompt,
 } from "./prompts";
 
-export interface Usage {
-  model: string;
-  input_tokens: number;
-  output_tokens: number;
-  cost_usd: number;
-}
+export type { Usage } from "./providers";
 
 export interface BatchSlot {
   type: QuestionType;
@@ -42,19 +36,12 @@ export interface Verdict {
   reason: string;
 }
 
-export const isMockAi = () => process.env.MOCK_AI === "true" || !process.env.OPENAI_API_KEY;
+export const isMockAi = () =>
+  process.env.MOCK_AI === "true" ||
+  (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_API_KEY);
 
-let _client: OpenAI | null = null;
-function client(): OpenAI {
-  if (!_client) _client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  return _client;
-}
-
-function usageFrom(model: string, u: { prompt_tokens?: number; completion_tokens?: number } | null | undefined): Usage {
-  const input = u?.prompt_tokens ?? 0;
-  const output = u?.completion_tokens ?? 0;
-  return { model, input_tokens: input, output_tokens: output, cost_usd: estimateCostUsd(model, input, output) };
-}
+/** Every call carries the provider so a request never straddles two backends. */
+export type Provider = ProviderName;
 
 /* ------------------------------------------------------------------ */
 /* JSON schemas for structured outputs                                 */
@@ -131,6 +118,7 @@ export async function generateQuestions(opts: {
   slots: BatchSlot[];
   avoid: string[];
   styleNotes: string | null;
+  provider: Provider;
 }): Promise<{ questions: RawQuestion[]; usage: Usage }> {
   if (isMockAi()) return mockGenerate(opts.settings, opts.slots);
 
@@ -163,22 +151,62 @@ export async function generateQuestions(opts: {
     );
   }
 
-  const res = await client().chat.completions.create({
-    model: GENERATION_MODEL,
-    messages: [
-      { role: "system", content: generationSystemPrompt(settings) },
-      { role: "user", content: userParts.join("\n") },
-    ],
-    response_format: { type: "json_schema", json_schema: questionsSchema },
+  const res = await runAi(opts.provider, {
+    purpose: "generate",
+    system: generationSystemPrompt(settings),
+    user: userParts.join("\n"),
+    schema: { name: questionsSchema.name, schema: questionsSchema.schema },
   });
 
-  const content = res.choices[0]?.message?.content;
-  if (!content) throw new Error("The AI returned an empty response.");
-  const parsed = JSON.parse(content) as { questions: RawQuestion[] };
-  if (!Array.isArray(parsed.questions) || parsed.questions.length === 0) {
+  const parsed = parseJson<{ questions: RawQuestion[] }>(res.text);
+  if (!Array.isArray(parsed?.questions) || parsed.questions.length === 0) {
     throw new Error("The AI returned no questions.");
   }
-  return { questions: parsed.questions, usage: usageFrom(GENERATION_MODEL, res.usage) };
+  return { questions: parsed.questions.map(normalizeRaw), usage: res.usage };
+}
+
+/**
+ * Some models (Gemini especially) bake the option letter into the option text
+ * — "A) Copper". The paper prints its own "(A)" label, so left alone it would
+ * read "(A) A) Copper". Strip a leading label, but only when every option has
+ * one, so legitimate text like "A) is correct because…" is never mangled.
+ */
+function stripOptionLabels(options: string[] | null): string[] | null {
+  if (!options || options.length === 0) return options;
+  const label = /^\s*\(?\s*([A-Da-d])\s*[).:\]]\s+/;
+  if (!options.every((o) => label.test(o))) return options;
+
+  const stripped = options.map((o, i) => {
+    const m = o.match(label);
+    // Only strip when the letter matches the option's own position.
+    if (!m || m[1].toUpperCase() !== LETTERS[i]) return o;
+    return o.replace(label, "").trim();
+  });
+  return stripped.some((s) => s.length === 0) ? options : stripped;
+}
+
+function normalizeRaw(raw: RawQuestion): RawQuestion {
+  return { ...raw, options: stripOptionLabels(raw.options) };
+}
+
+/** Models occasionally wrap JSON in prose or a fenced block. */
+function parseJson<T>(text: string): T | null {
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch {
+    const fenced = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+    const start = fenced.search(/[[{]/);
+    const end = Math.max(fenced.lastIndexOf("}"), fenced.lastIndexOf("]"));
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(fenced.slice(start, end + 1)) as T;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -187,6 +215,7 @@ export async function generateQuestions(opts: {
 export async function verifyQuestions(opts: {
   settings: PaperSettings;
   questions: Pick<Question, "type" | "difficulty" | "chapter" | "question_text" | "options" | "correct_answer" | "solution">[];
+  provider: Provider;
 }): Promise<{ verdicts: Verdict[]; usage: Usage }> {
   if (isMockAi()) {
     return {
@@ -223,22 +252,15 @@ export async function verifyQuestions(opts: {
     };
   });
 
-  const res = await client().chat.completions.create({
-    model: VERIFIER_MODEL,
-    messages: [
-      { role: "system", content: verifierSystemPrompt(settings) },
-      {
-        role: "user",
-        content: `Allowed chapters: ${settings.chapters.join("; ")}\n\nQuestions to review:\n${JSON.stringify(payload, null, 2)}`,
-      },
-    ],
-    response_format: { type: "json_schema", json_schema: verdictsSchema },
+  const res = await runAi(opts.provider, {
+    purpose: "verify",
+    system: verifierSystemPrompt(settings),
+    user: `Allowed chapters: ${settings.chapters.join("; ")}\n\nQuestions to review:\n${JSON.stringify(payload, null, 2)}`,
+    schema: { name: verdictsSchema.name, schema: verdictsSchema.schema },
   });
 
-  const content = res.choices[0]?.message?.content;
-  if (!content) throw new Error("Verifier returned an empty response.");
-  const parsed = JSON.parse(content) as { verdicts: Verdict[] };
-  return { verdicts: parsed.verdicts ?? [], usage: usageFrom(VERIFIER_MODEL, res.usage) };
+  const parsed = parseJson<{ verdicts: Verdict[] }>(res.text);
+  return { verdicts: parsed?.verdicts ?? [], usage: res.usage };
 }
 
 /* ------------------------------------------------------------------ */
@@ -312,7 +334,8 @@ export interface ExtractedBlueprint {
 }
 
 export async function extractBlueprint(
-  pages: ReferencePage[]
+  pages: ReferencePage[],
+  provider: Provider
 ): Promise<{ blueprint: ExtractedBlueprint; usage: Usage }> {
   if (isMockAi()) {
     return {
@@ -330,31 +353,19 @@ export async function extractBlueprint(
     };
   }
 
-  const res = await client().chat.completions.create({
-    model: GENERATION_MODEL,
-    messages: [
-      { role: "system", content: BLUEPRINT_EXTRACTION_PROMPT },
-      {
-        role: "user",
-        content: [
-          { type: "text" as const, text: `Blueprint page(s): ${pages.length}` },
-          ...pages.map((p) => ({
-            type: "image_url" as const,
-            image_url: { url: p.data_url, detail: "high" as const },
-          })),
-        ],
-      },
-    ],
-    response_format: { type: "json_schema", json_schema: blueprintSchema },
+  const res = await runAi(provider, {
+    purpose: "generate",
+    system: BLUEPRINT_EXTRACTION_PROMPT,
+    user: `Blueprint page(s): ${pages.length}`,
+    images: pages.map((p) => p.data_url),
+    schema: { name: blueprintSchema.name, schema: blueprintSchema.schema },
   });
 
-  const content = res.choices[0]?.message?.content;
-  if (!content) throw new Error("The blueprint could not be read.");
-  const parsed = JSON.parse(content) as ExtractedBlueprint;
-  if (!parsed.sections?.length) {
+  const parsed = parseJson<ExtractedBlueprint>(res.text);
+  if (!parsed?.sections?.length) {
     throw new Error("No parts/sections were found in that blueprint.");
   }
-  return { blueprint: parsed, usage: usageFrom(GENERATION_MODEL, res.usage) };
+  return { blueprint: parsed, usage: res.usage };
 }
 
 /* ------------------------------------------------------------------ */
@@ -363,6 +374,7 @@ export async function extractBlueprint(
 export async function analyzeReference(opts: {
   settings: PaperSettings;
   pages: ReferencePage[];
+  provider: Provider;
 }): Promise<{ styleNotes: string; usage: Usage }> {
   if (isMockAi()) {
     return {
@@ -372,26 +384,16 @@ export async function analyzeReference(opts: {
     };
   }
 
-  const res = await client().chat.completions.create({
-    model: GENERATION_MODEL,
-    messages: [
-      { role: "system", content: referenceAnalysisPrompt(opts.settings) },
-      {
-        role: "user",
-        content: [
-          { type: "text" as const, text: `Reference pages (${opts.pages.length}):` },
-          ...opts.pages.map((p) => ({
-            type: "image_url" as const,
-            image_url: { url: p.data_url, detail: "high" as const },
-          })),
-        ],
-      },
-    ],
+  const res = await runAi(opts.provider, {
+    purpose: "generate",
+    system: referenceAnalysisPrompt(opts.settings),
+    user: `Reference pages (${opts.pages.length}):`,
+    images: opts.pages.map((p) => p.data_url),
   });
 
-  const styleNotes = res.choices[0]?.message?.content?.trim();
+  const styleNotes = res.text.trim();
   if (!styleNotes) throw new Error("Could not read the reference PDF pages.");
-  return { styleNotes, usage: usageFrom(GENERATION_MODEL, res.usage) };
+  return { styleNotes, usage: res.usage };
 }
 
 /* ------------------------------------------------------------------ */

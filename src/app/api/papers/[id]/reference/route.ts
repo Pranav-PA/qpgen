@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getApiUser, jsonError, logUsage } from "@/lib/api";
+import { getAiProvider, getApiUser, jsonError, logUsage } from "@/lib/api";
 import { referencePagesSchema } from "@/lib/schemas";
 import { analyzeReference } from "@/lib/ai/generate";
 import type { Paper } from "@/lib/types";
@@ -37,6 +37,7 @@ export async function POST(
     const { styleNotes, usage } = await analyzeReference({
       settings: paper.settings,
       pages: body.pages,
+      provider: await getAiProvider(),
     });
     await supabase
       .from("papers")

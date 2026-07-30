@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { DEFAULT_AI_PROVIDER } from "@/lib/constants";
 import type { Profile } from "@/lib/types";
-import type { Usage } from "@/lib/ai/generate";
+import type { ProviderName, Usage } from "@/lib/ai/providers";
 
 export function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
@@ -35,6 +36,36 @@ export async function getApiAdmin() {
   if (ctx.profile.role !== "admin")
     return { error: jsonError("Admin access required.", 403) };
   return ctx;
+}
+
+/**
+ * Which AI backend to use. Admin-selectable at runtime, falling back to the
+ * env default, and finally to whichever provider actually has a key.
+ */
+export async function getAiProvider(): Promise<ProviderName> {
+  let choice: string | undefined;
+  try {
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from("app_config")
+      .select("value")
+      .eq("key", "ai")
+      .maybeSingle();
+    choice = (data?.value as { provider?: string } | null)?.provider;
+  } catch {
+    // Fall through to the env default.
+  }
+
+  const wanted: ProviderName =
+    choice === "openai" || choice === "google"
+      ? choice
+      : (DEFAULT_AI_PROVIDER as ProviderName);
+
+  const hasGoogle = !!process.env.GOOGLE_API_KEY;
+  const hasOpenAi = !!process.env.OPENAI_API_KEY;
+  if (wanted === "google" && !hasGoogle && hasOpenAi) return "openai";
+  if (wanted === "openai" && !hasOpenAi && hasGoogle) return "google";
+  return wanted;
 }
 
 export async function logUsage(entry: {

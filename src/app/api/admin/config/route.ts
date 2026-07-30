@@ -7,6 +7,7 @@ const bodySchema = z.object({
   global_daily_cap: z.number().int().min(0).max(100000),
   default_user_daily_cap: z.number().int().min(0).max(1000),
   generation_paused: z.boolean(),
+  ai_provider: z.enum(["google", "openai"]).optional(),
 });
 
 export async function POST(request: Request) {
@@ -20,11 +21,24 @@ export async function POST(request: Request) {
     return jsonError("Invalid input.", 400);
   }
 
+  const { ai_provider, ...limits } = body;
   const admin = createAdminClient();
+
   const { error } = await admin
     .from("app_config")
-    .update({ value: body, updated_at: new Date().toISOString() })
+    .update({ value: limits, updated_at: new Date().toISOString() })
     .eq("key", "limits");
   if (error) return jsonError("Update failed.", 500);
+
+  if (ai_provider) {
+    const { error: aiError } = await admin
+      .from("app_config")
+      .upsert(
+        { key: "ai", value: { provider: ai_provider }, updated_at: new Date().toISOString() },
+        { onConflict: "key" }
+      );
+    if (aiError) return jsonError("Saved limits, but the AI provider did not update.", 500);
+  }
+
   return NextResponse.json({ ok: true });
 }

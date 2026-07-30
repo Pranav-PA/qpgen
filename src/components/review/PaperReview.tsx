@@ -60,46 +60,16 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
     }
   }
 
-  async function openExport(path: string) {
-    // Opened synchronously where possible; a save first would cost the popup
-    // its user-gesture context, so open the tab up front and point it after.
-    const tab = window.open("", "_blank");
-    if (dirty && !(await save())) {
-      tab?.close();
-      return;
-    }
-    if (tab) tab.location.href = path;
-    else window.location.href = path;
-  }
+  const pdfUrl = (doc: "paper" | "key") =>
+    `/api/papers/${paper.id}/export-pdf?doc=${doc}`;
 
-  /**
-   * Fetch the export as a blob and save it. Going through fetch (rather than a
-   * plain link) lets us show progress for slow server-side PDF rendering and
-   * surface the API's error message instead of dumping JSON into a tab.
-   */
-  async function download(path: string, filename: string) {
-    if (dirty && !(await save())) return;
-    const kind = path.includes("export-pdf") ? "pdf" : "docx";
-    const doc = path.includes("doc=key") ? "key" : "paper";
-    setBusyExport(`${kind}-${doc}`);
-    setNotice("");
+  async function saveThenDownload(doc: "paper" | "key") {
+    setBusyExport(doc);
     try {
-      const res = await fetch(path);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || "The export failed. Please try again.");
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename.replace(/[\\/:*?"<>|]/g, "");
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "The export failed.");
+      if (!(await save())) return;
+      setNotice("Preparing your PDF — the download starts in a few seconds.");
+      // Top-level navigation to an attachment downloads without navigating away.
+      window.location.href = pdfUrl(doc);
     } finally {
       setBusyExport(null);
     }
@@ -246,54 +216,47 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
         <div className="grid sm:grid-cols-2 gap-4">
           {(
             [
-              ["paper", "📄 Question paper", "(for students)", `/papers/${paper.id}/print`],
-              ["key", "🔑 Answer key", "(for you)", `/papers/${paper.id}/print-key`],
+              ["paper", "📄 Question paper", "(for students)"],
+              ["key", "🔑 Answer key", "(for you)"],
             ] as const
-          ).map(([doc, heading, who, printPath]) => (
+          ).map(([doc, heading, who]) => (
             <div key={doc} className="border border-line rounded-lg p-4">
               <h3 className="text-sm font-semibold mb-2">
                 {heading} <span className="text-muted font-normal">{who}</span>
               </h3>
-              <div className="flex flex-wrap gap-2">
+              {/*
+                A real anchor whenever possible: a scripted download after an
+                await loses its user-gesture context and browsers silently
+                block it. With unsaved edits we must save first, so fall back
+                to a top-level navigation, which downloads an attachment
+                without that restriction.
+              */}
+              {dirty ? (
                 <button
                   className="btn-primary text-xs"
                   disabled={busyExport !== null}
+                  onClick={() => saveThenDownload(doc)}
+                >
+                  {busyExport === doc ? "Saving…" : "⬇ Save & download PDF"}
+                </button>
+              ) : (
+                <a
+                  className="btn-primary text-xs"
+                  href={pdfUrl(doc)}
                   onClick={() =>
-                    download(
-                      `/api/papers/${paper.id}/export-pdf?doc=${doc}`,
-                      `${paper.title} - ${doc === "paper" ? "Question Paper" : "ANSWER KEY"}.pdf`
-                    )
+                    setNotice("Preparing your PDF — the download starts in a few seconds.")
                   }
                 >
-                  {busyExport === `pdf-${doc}` ? "Preparing PDF…" : "⬇ Download PDF"}
-                </button>
-                <button
-                  className="btn-secondary text-xs"
-                  disabled={busyExport !== null}
-                  onClick={() =>
-                    download(
-                      `/api/papers/${paper.id}/export?doc=${doc}`,
-                      `${paper.title} - ${doc === "paper" ? "Question Paper" : "ANSWER KEY"}.docx`
-                    )
-                  }
-                >
-                  {busyExport === `docx-${doc}` ? "Preparing…" : "⬇ Word (.docx)"}
-                </button>
-                <button
-                  className="btn-secondary text-xs"
-                  disabled={busyExport !== null}
-                  onClick={() => openExport(printPath)}
-                  title="Open a print-ready view in a new tab"
-                >
-                  🖨 Print
-                </button>
-              </div>
+                  ⬇ Download PDF
+                </a>
+              )}
             </div>
           ))}
         </div>
         <p className="help mt-3">
-          PDFs are rendered on the server with full equation formatting; the
-          first one after a while can take a few seconds.
+          PDFs are rendered on the server with full equation formatting. The
+          first download after a quiet spell takes a few seconds while the
+          renderer warms up.
         </p>
       </div>
     </div>

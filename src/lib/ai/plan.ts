@@ -1,4 +1,5 @@
 import { GENERATION_BATCH_SIZE } from "@/lib/constants";
+import { sectionSlotTypes } from "@/lib/types";
 import type {
   Difficulty,
   DifficultySettings,
@@ -23,12 +24,15 @@ function blueprintPlan(settings: PaperSettings): BatchSlot[] {
   const slots: BatchSlot[] = [];
 
   for (const section of bp.sections) {
+    // Sub-groups fix the type of each printed slot in order (e.g. PART-A's
+    // first 15 are MCQs, the next 5 fill-in-the-blanks).
+    const slotTypes = sectionSlotTypes(section);
     const sectionSlots: BatchSlot[] = [];
     for (const row of bp.rows) {
       const count = row.counts[section.id] ?? 0;
       for (let i = 0; i < count; i++) {
         sectionSlots.push({
-          type: section.question_type,
+          type: slotTypes[sectionSlots.length] ?? section.question_type,
           difficulty: "medium",
           chapter: row.chapter,
           section_id: section.id,

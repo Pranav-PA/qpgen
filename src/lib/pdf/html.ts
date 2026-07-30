@@ -1,6 +1,6 @@
 import katex from "katex";
-import { groupBySection } from "@/lib/sections";
-import { hasOptions, type Paper, type Question } from "@/lib/types";
+import { groupBySection, subHeadingFor } from "@/lib/sections";
+import { hasOptions, isBlueprint, type Paper, type Question } from "@/lib/types";
 import { fetchImageAsDataUri, katexCss } from "./assets";
 
 const LETTERS = ["A", "B", "C", "D"];
@@ -81,6 +81,16 @@ p.scope { font-size: 10pt; color: #333; margin: 2px 0 0; }
   display: flex; flex-wrap: wrap; justify-content: center;
   gap: 4px 26px; font-size: 10pt; margin-top: 6px;
 }
+header.letterhead.board { border-bottom: none; padding-bottom: 2px; }
+header.letterhead.board .examtitle { font-size: 14pt; margin-top: 6px; }
+header.letterhead.board .subjline {
+  font-size: 12pt; font-weight: bold; letter-spacing: .6px; margin: 3px 0 0;
+}
+.timebar {
+  display: flex; justify-content: space-between;
+  border-top: 1.4px solid #000; border-bottom: 1.4px solid #000;
+  margin-top: 8px; padding: 3px 2px; font-size: 11pt; font-weight: bold;
+}
 .instructions {
   border: 1px solid #999; border-radius: 4px;
   padding: 8px 10px; margin-bottom: 14px; font-size: 10pt;
@@ -88,6 +98,12 @@ p.scope { font-size: 10pt; color: #333; margin: 2px 0 0; }
 }
 .instructions .h { font-weight: bold; margin-bottom: 3px; }
 .instructions p { margin: 1px 0; }
+.instrlist { margin: 0; padding-left: 20px; }
+.instrlist li { margin: 1.5px 0; }
+.subhead {
+  font-weight: bold; font-size: 10.5pt; margin: 10px 0 5px;
+  break-after: avoid; page-break-after: avoid;
+}
 .q { break-inside: avoid; page-break-inside: avoid; margin-bottom: 11px; }
 .q .stem { display: flex; gap: 7px; align-items: baseline; }
 .q .num { font-weight: bold; white-space: nowrap; }
@@ -120,8 +136,42 @@ h2.sec { font-size: 13pt; margin: 14px 0 6px; }
 .katex-display { margin: 0.3em 0; }
 `;
 
-function letterheadHtml(paper: Paper, logo: string | null, keyLabel: boolean): string {
+function fmtDuration(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h && m) return `${h} hour${h > 1 ? "s" : ""} ${m} minutes`;
+  if (h) return `${h} hour${h > 1 ? "s" : ""}`;
+  return `${m} minutes`;
+}
+
+/**
+ * Board papers use the official layout: the exam identity centred, then a
+ * Time/Max-Marks rule spanning the page. Non-board papers keep the compact
+ * letterhead with the date/time metadata inline.
+ */
+function letterheadHtml(
+  paper: Paper,
+  logo: string | null,
+  keyLabel: boolean,
+  boardStyle: boolean
+): string {
   const i = paper.institution_details;
+
+  if (boardStyle) {
+    return `<header class="letterhead board">
+      ${logo ? `<img class="logo" src="${logo}" alt=""/>` : ""}
+      <h1 class="inst">${escapeHtml(i.name)}</h1>
+      ${i.address ? `<p class="addr">${escapeHtml(i.address)}</p>` : ""}
+      <p class="examtitle">${escapeHtml(i.exam_title)}${keyLabel ? " — ANSWER KEY" : ""}</p>
+      <p class="subjline">SUBJECT: ${escapeHtml(paper.subject.toUpperCase())}</p>
+      ${i.exam_date ? `<p class="scope">Date: ${escapeHtml(fmtDate(i.exam_date))}${i.exam_time ? ` &nbsp;·&nbsp; ${escapeHtml(i.exam_time)}` : ""}</p>` : ""}
+      <div class="timebar">
+        <span>Time: ${escapeHtml(fmtDuration(i.duration_minutes))}</span>
+        <span>Max. Marks: ${i.max_marks}</span>
+      </div>
+    </header>`;
+  }
+
   const meta: string[] = [];
   if (i.exam_date) meta.push(`Date: ${escapeHtml(fmtDate(i.exam_date))}`);
   if (i.exam_time) meta.push(`Time: ${escapeHtml(i.exam_time)}`);
@@ -174,13 +224,17 @@ function shell(title: string, body: string): string {
 export async function questionPaperHtml(paper: Paper): Promise<string> {
   const logo = await fetchImageAsDataUri(paper.institution_details.logo_url);
   const inst = paper.institution_details;
+  const boardStyle = isBlueprint(paper.settings);
 
-  const instructions = inst.instructions.trim()
-    ? `<div class="instructions"><div class="h">General instructions</div>${inst.instructions
-        .split("\n")
-        .filter((l) => l.trim())
-        .map((l) => `<p>${escapeHtml(l.trim())}</p>`)
-        .join("")}</div>`
+  const lines = inst.instructions
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const instructions = lines.length
+    ? `<div class="instructions"><div class="h">General Instructions:</div><ol class="instrlist">${lines
+        // The teacher's text is often already numbered; don't double-number it.
+        .map((l) => `<li>${escapeHtml(l.replace(/^\d+[.)]\s*/, ""))}</li>`)
+        .join("")}</ol></div>`
     : "";
 
   const groups = groupBySection(paper)
@@ -191,14 +245,20 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
           }</div>`
         : "";
       const qs = g.questions
-        .map((q, i) => questionHtml(q, g.startIndex - 1 + i))
+        .map((q, i) => {
+          const sub = subHeadingFor(g, i);
+          const subHead = sub
+            ? `<div class="subhead">${escapeHtml(sub)}</div>`
+            : "";
+          return subHead + questionHtml(q, g.startIndex - 1 + i);
+        })
         .join("");
       return head + qs;
     })
     .join("");
 
   const body = `
-    ${letterheadHtml(paper, logo, false)}
+    ${letterheadHtml(paper, logo, false, boardStyle)}
     ${instructions}
     ${groups}
     <p class="endnote">— End of question paper —</p>`;
@@ -245,7 +305,7 @@ export async function answerKeyHtml(paper: Paper): Promise<string> {
     .join("");
 
   const body = `
-    ${letterheadHtml(paper, logo, true)}
+    ${letterheadHtml(paper, logo, true, isBlueprint(paper.settings))}
     <p class="keywarn">For teacher use only — do not distribute with the question paper.</p>
     <h2 class="sec">Quick answers</h2>
     ${quick}

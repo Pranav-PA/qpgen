@@ -37,6 +37,17 @@ export const blueprintSchema = z.object({
         questions_to_answer: z.number().int().min(1).max(MAX_QUESTIONS_BLUEPRINT),
         question_type: questionTypeSchema,
         instruction: z.string().max(300).optional(),
+        subgroups: z
+          .array(
+            z.object({
+              id: z.string().trim().min(1).max(20),
+              label: z.string().trim().min(1).max(80),
+              question_type: questionTypeSchema,
+              count: z.number().int().min(1).max(MAX_QUESTIONS_BLUEPRINT),
+            })
+          )
+          .max(4)
+          .optional(),
       })
     )
     .min(1, "Add at least one part.")

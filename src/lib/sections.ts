@@ -1,5 +1,6 @@
 import {
   defaultSectionInstruction,
+  subGroupStartingAt,
   type BlueprintSection,
   type Paper,
   type Question,
@@ -13,6 +14,16 @@ export interface SectionGroup {
   questions: Question[];
   /** Paper-wide 1-based number of the first question in this group. */
   startIndex: number;
+}
+
+/** Sub-group label to print before the question at this offset, if any. */
+export function subHeadingFor(
+  group: SectionGroup,
+  offsetInGroup: number
+): string | null {
+  if (!group.section) return null;
+  const sub = subGroupStartingAt(group.section, offsetInGroup);
+  return sub && (group.section.subgroups?.length ?? 0) > 1 ? sub.label : null;
 }
 
 /**

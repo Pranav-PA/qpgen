@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { getApiUser, jsonError, logUsage } from "@/lib/api";
+import { getAiProvider, getApiUser, jsonError, logUsage } from "@/lib/api";
 import { nextBatchSlots, toAvoidList } from "@/lib/ai/plan";
 import {
   generateQuestions,
@@ -57,11 +57,13 @@ export async function POST(
   }
 
   try {
+    const provider = await getAiProvider();
     const gen = await generateQuestions({
       settings: paper.settings,
       slots,
       avoid: avoid.slice(0, 80),
       styleNotes: paper.settings.style_notes ?? null,
+      provider,
     });
     await logUsage({ user_id: user.id, action: "generate_batch", usage: gen.usage });
 
@@ -70,6 +72,7 @@ export async function POST(
     const verification = await verifyQuestions({
       settings: paper.settings,
       questions: shuffled.map((q) => ({ ...q, options: q.options ?? undefined })),
+      provider,
     });
     await logUsage({ user_id: user.id, action: "verify_batch", usage: verification.usage });
 

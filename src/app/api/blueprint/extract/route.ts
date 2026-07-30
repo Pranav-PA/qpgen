@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import { getApiUser, jsonError, logUsage } from "@/lib/api";
+import { getAiProvider, getApiUser, jsonError, logUsage } from "@/lib/api";
 import { extractBlueprint } from "@/lib/ai/generate";
 import { MAX_BLUEPRINT_PAGES, MAX_BLUEPRINT_SECTIONS } from "@/lib/constants";
 import { defaultTypeForMarks, type Blueprint } from "@/lib/types";
@@ -57,7 +57,10 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { blueprint: raw, usage } = await extractBlueprint(body.pages);
+    const { blueprint: raw, usage } = await extractBlueprint(
+      body.pages,
+      await getAiProvider()
+    );
     await logUsage({ user_id: user.id, action: "analyze_reference", usage });
 
     // Normalize into the app's shape: stable ids, sane bounds, derived types.

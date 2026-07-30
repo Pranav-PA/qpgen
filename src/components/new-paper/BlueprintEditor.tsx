@@ -11,6 +11,7 @@ import {
   defaultSectionInstruction,
   defaultTypeForMarks,
   sectionGridTotal,
+  subGroupTotal,
   type Blueprint,
   type QuestionType,
 } from "@/lib/types";
@@ -329,6 +330,8 @@ function SectionsTable({
               </div>
             </div>
 
+            <SubGroups section={s} onUpdate={onUpdate} />
+
             <p className="help mt-2">
               Prints as: <em>{s.instruction?.trim() || defaultSectionInstruction(s)}</em>
             </p>
@@ -343,6 +346,128 @@ function SectionsTable({
       >
         + Add part
       </button>
+    </div>
+  );
+}
+
+/* ================================================================== */
+
+/**
+ * Optional split of a part into labelled runs — Karnataka's PART-A prints
+ * "I. Pick the correct option" for questions 1–15 then "II. Fill in the
+ * blanks" for 16–20. The chapter grid still allocates at part level.
+ */
+function SubGroups({
+  section: s,
+  onUpdate,
+}: {
+  section: Blueprint["sections"][number];
+  onUpdate: (id: string, patch: Partial<Blueprint["sections"][number]>) => void;
+}) {
+  const groups = s.subgroups ?? [];
+  const total = subGroupTotal(s);
+  const balanced = total === s.questions_to_set;
+
+  function enable() {
+    onUpdate(s.id, {
+      subgroups: [
+        { id: "g1", label: "I. Pick the correct option", question_type: s.question_type, count: s.questions_to_set },
+      ],
+    });
+  }
+
+  function patch(idx: number, next: Partial<Blueprint["sections"][number]["subgroups"] extends (infer U)[] | undefined ? U : never>) {
+    onUpdate(s.id, {
+      subgroups: groups.map((g, i) => (i === idx ? { ...g, ...next } : g)),
+    });
+  }
+
+  if (groups.length === 0) {
+    return (
+      <button type="button" className="btn-secondary text-xs mt-3" onClick={enable}>
+        + Split this part into sub-groups
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <p className="text-xs font-medium mb-2">Sub-groups within {s.name}</p>
+      <div className="space-y-2">
+        {groups.map((g, i) => (
+          <div key={g.id} className="grid gap-2 sm:grid-cols-[1fr_auto_auto_auto] items-end">
+            <div>
+              <label className="text-xs text-muted">Heading</label>
+              <input
+                className="input text-sm"
+                aria-label={`Sub-group ${i + 1} heading`}
+                value={g.label}
+                onChange={(e) => patch(i, { label: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted">Type</label>
+              <select
+                className="input text-sm"
+                aria-label={`Sub-group ${i + 1} question type`}
+                value={g.question_type}
+                onChange={(e) => patch(i, { question_type: e.target.value as QuestionType })}
+              >
+                {TYPE_OPTIONS.map((t) => (
+                  <option key={t} value={t}>{QUESTION_TYPE_LABELS[t]}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-muted">Qs</label>
+              <NumberInput
+                className="input text-sm w-20"
+                aria-label={`Sub-group ${i + 1} question count`}
+                min={1}
+                max={s.questions_to_set}
+                fallback={1}
+                value={g.count}
+                onChange={(n) => patch(i, { count: n })}
+              />
+            </div>
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              onClick={() =>
+                onUpdate(s.id, {
+                  subgroups: groups.length <= 1 ? undefined : groups.filter((_, x) => x !== i),
+                })
+              }
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-3 mt-2">
+        <button
+          type="button"
+          className="btn-secondary text-xs"
+          onClick={() =>
+            onUpdate(s.id, {
+              subgroups: [
+                ...groups,
+                {
+                  id: `g${groups.length + 1}`,
+                  label: `${["I", "II", "III", "IV"][groups.length] ?? groups.length + 1}. `,
+                  question_type: s.question_type,
+                  count: Math.max(1, s.questions_to_set - total),
+                },
+              ],
+            })
+          }
+        >
+          + Add sub-group
+        </button>
+        <span className={`text-xs ${balanced ? "text-ok" : "text-danger"}`}>
+          {total} / {s.questions_to_set} questions {balanced ? "✓" : "— must match"}
+        </span>
+      </div>
     </div>
   );
 }

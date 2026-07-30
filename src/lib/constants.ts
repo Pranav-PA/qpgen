@@ -20,11 +20,26 @@ export const GENERATION_MODEL =
 export const VERIFIER_MODEL =
   process.env.OPENAI_VERIFIER_MODEL || "gpt-5.6-luna";
 
+export const GEMINI_GENERATION_MODEL =
+  process.env.GEMINI_GENERATION_MODEL || "gemini-3.6-flash";
+export const GEMINI_VERIFIER_MODEL =
+  process.env.GEMINI_VERIFIER_MODEL || "gemini-3.5-flash-lite";
+
+/** Provider used when the admin panel has not set one. */
+export const DEFAULT_AI_PROVIDER =
+  process.env.AI_PROVIDER === "openai" ? "openai" : "google";
+
 // USD per 1M tokens, for cost logging. Override via env if pricing changes.
 export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   "gpt-5.6-sol": { input: 5, output: 30 },
   "gpt-5.6-terra": { input: 2.5, output: 15 },
   "gpt-5.6-luna": { input: 1, output: 6 },
+  "gemini-3.6-flash": { input: 1.5, output: 7.5 },
+  "gemini-3.5-flash": { input: 1.0, output: 5.0 },
+  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
+  "gemini-3.1-pro-preview": { input: 2.0, output: 12 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5 },
+  "gemini-2.5-flash-lite": { input: 0.1, output: 0.4 },
 };
 
 export function estimateCostUsd(

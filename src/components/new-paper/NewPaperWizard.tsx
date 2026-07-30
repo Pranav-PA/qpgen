@@ -17,6 +17,7 @@ import {
   blueprintQuestionCount,
   blueprintTotalMarks,
   sectionGridTotal,
+  subGroupTotal,
   type Blueprint,
   type InstitutionDetails,
   type PaperSettings,
@@ -147,6 +148,13 @@ export default function NewPaperWizard({
           .map((s) => s.name)
           .join(", ")}: the chapter grid doesn't add up to the number of questions set.`;
       if (blueprintQuestionCount(bp) < 1) return "The blueprint has no questions.";
+      const badSubs = bp.sections.filter(
+        (s) => (s.subgroups?.length ?? 0) > 0 && subGroupTotal(s) !== s.questions_to_set
+      );
+      if (badSubs.length > 0)
+        return `${badSubs
+          .map((s) => s.name)
+          .join(", ")}: the sub-group question counts don't add up to the part's total.`;
       return "";
     }
 

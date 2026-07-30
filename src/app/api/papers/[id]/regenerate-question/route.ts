@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import { getApiUser, jsonError, logUsage } from "@/lib/api";
+import { getAiProvider, getApiUser, jsonError, logUsage } from "@/lib/api";
 import { toAvoidList } from "@/lib/ai/plan";
 import {
   generateQuestions,
@@ -44,6 +44,7 @@ export async function POST(
   const old = paper.questions[idx];
 
   try {
+    const provider = await getAiProvider();
     const gen = await generateQuestions({
       settings: paper.settings,
       slots: [
@@ -60,12 +61,14 @@ export async function POST(
       // The old question goes on the avoid-list so we get something new.
       avoid: toAvoidList(paper.questions, 60),
       styleNotes: paper.settings.style_notes ?? null,
+      provider,
     });
     const raw = shuffleMcqOptions(gen.questions[0]);
 
     const verification = await verifyQuestions({
       settings: paper.settings,
       questions: [{ ...raw, options: raw.options ?? undefined }],
+      provider,
     });
     const verdict = verification.verdicts[0];
 

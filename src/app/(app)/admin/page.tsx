@@ -1,5 +1,12 @@
 import { requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  DEFAULT_AI_PROVIDER,
+  GEMINI_GENERATION_MODEL,
+  GEMINI_VERIFIER_MODEL,
+  GENERATION_MODEL,
+  VERIFIER_MODEL,
+} from "@/lib/constants";
 import AdminPanel, {
   type AdminData,
 } from "@/components/admin/AdminPanel";
@@ -57,6 +64,12 @@ export default async function AdminPage() {
     admin.from("app_config").select("value").eq("key", "limits").single(),
   ]);
 
+  const { data: aiCfg } = await admin
+    .from("app_config")
+    .select("value")
+    .eq("key", "ai")
+    .maybeSingle();
+
   // 14-day generation trend, computed from the 30d log slice.
   const trend: { date: string; count: number }[] = [];
   for (let i = 13; i >= 0; i--) {
@@ -90,11 +103,22 @@ export default async function AdminPage() {
     })),
     reports: (reports ?? []) as AdminData["reports"],
     users: (users ?? []) as AdminData["users"],
-    config: (config?.value ?? {
-      global_daily_cap: 500,
-      default_user_daily_cap: 10,
-      generation_paused: false,
-    }) as AdminData["config"],
+    config: {
+      ...((config?.value ?? {
+        global_daily_cap: 500,
+        default_user_daily_cap: 10,
+        generation_paused: false,
+      }) as Omit<AdminData["config"], "ai_provider">),
+      ai_provider:
+        ((aiCfg?.value as { provider?: string } | null)?.provider as
+          | "google"
+          | "openai"
+          | undefined) ?? DEFAULT_AI_PROVIDER,
+    },
+    models: {
+      google: [GEMINI_GENERATION_MODEL, GEMINI_VERIFIER_MODEL],
+      openai: [GENERATION_MODEL, VERIFIER_MODEL],
+    },
   };
 
   return <AdminPanel data={data} />;
