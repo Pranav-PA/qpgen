@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { renderPdfToImages } from "@/lib/pdf";
+import NumberInput from "@/components/NumberInput";
 import {
   DEFAULT_INSTRUCTIONS,
   MAX_LOGO_MB,
@@ -524,22 +525,13 @@ function StepExam({
       <div className="grid sm:grid-cols-2 gap-4">
         <div>
           <label htmlFor="qcount" className="label">Number of questions</label>
-          <input
+          <NumberInput
             id="qcount"
-            type="number"
             min={1}
             max={MAX_QUESTIONS_PER_PAPER}
-            className="input"
+            fallback={1}
             value={settings.question_count}
-            onChange={(e) =>
-              setSettings({
-                ...settings,
-                question_count: Math.max(
-                  1,
-                  Math.min(MAX_QUESTIONS_PER_PAPER, Number(e.target.value) || 1)
-                ),
-              })
-            }
+            onChange={(n) => setSettings({ ...settings, question_count: n })}
           />
           <p className="help">Up to {MAX_QUESTIONS_PER_PAPER} per paper.</p>
         </div>
@@ -576,21 +568,17 @@ function StepExam({
           ).map(([key, label]) => (
             <div key={key}>
               <label htmlFor={key} className="text-xs text-muted">{label}</label>
-              <input
+              <NumberInput
                 id={key}
-                type="number"
                 min={0}
                 max={100}
                 step={5}
-                className="input"
+                fallback={0}
                 value={settings.difficulty[key]}
-                onChange={(e) =>
+                onChange={(n) =>
                   setSettings({
                     ...settings,
-                    difficulty: {
-                      ...settings.difficulty,
-                      [key]: Math.max(0, Math.min(100, Number(e.target.value) || 0)),
-                    },
+                    difficulty: { ...settings.difficulty, [key]: n },
                   })
                 }
               />
@@ -605,36 +593,26 @@ function StepExam({
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label htmlFor="marks" className="label">Marks per question</label>
-          <input
+          <NumberInput
             id="marks"
-            type="number"
             min={0.5}
+            max={20}
             step={0.5}
-            className="input"
+            fallback={1}
             value={settings.marks_per_question}
-            onChange={(e) =>
-              setSettings({
-                ...settings,
-                marks_per_question: Number(e.target.value) || 1,
-              })
-            }
+            onChange={(n) => setSettings({ ...settings, marks_per_question: n })}
           />
         </div>
         <div>
           <label htmlFor="negmarks" className="label">Negative marks</label>
-          <input
+          <NumberInput
             id="negmarks"
-            type="number"
             min={0}
+            max={10}
             step={0.25}
-            className="input"
+            fallback={0}
             value={settings.negative_marks}
-            onChange={(e) =>
-              setSettings({
-                ...settings,
-                negative_marks: Number(e.target.value) || 0,
-              })
-            }
+            onChange={(n) => setSettings({ ...settings, negative_marks: n })}
           />
           <p className="help">E.g. JEE/NEET pattern is +4 / −1.</p>
         </div>
@@ -744,30 +722,28 @@ function StepInstitution({
         </div>
         <div>
           <label htmlFor="duration" className="label">Duration (minutes)</label>
-          <input
+          <NumberInput
             id="duration"
-            type="number"
             min={5}
-            className="input"
+            max={600}
+            fallback={60}
             value={inst.duration_minutes}
-            onChange={(e) =>
-              setInst({ ...inst, duration_minutes: Number(e.target.value) || 60 })
-            }
+            onChange={(n) => setInst({ ...inst, duration_minutes: n })}
           />
         </div>
       </div>
 
       <div>
         <label htmlFor="maxMarks" className="label">Maximum marks</label>
-        <input
+        <NumberInput
           id="maxMarks"
-          type="number"
           min={1}
-          className="input"
+          max={2000}
+          fallback={autoMaxMarks}
           value={maxMarksTouched ? inst.max_marks : autoMaxMarks}
-          onChange={(e) => {
+          onChange={(n) => {
             setMaxMarksTouched(true);
-            setInst({ ...inst, max_marks: Number(e.target.value) || autoMaxMarks });
+            setInst({ ...inst, max_marks: n });
           }}
         />
         <p className="help">
