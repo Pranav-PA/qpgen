@@ -178,16 +178,27 @@ export async function verifyQuestions(opts: {
   }
 
   const { settings, questions } = opts;
-  const payload = questions.map((q, index) => ({
-    index,
-    type: q.type,
-    difficulty: q.difficulty,
-    claimed_chapter: q.chapter,
-    question_text: q.question_text,
-    options: q.options ?? null,
-    stated_correct_answer: q.correct_answer,
-    stated_solution: q.solution,
-  }));
+  const payload = questions.map((q, index) => {
+    const idx =
+      q.options && q.options.length > 0
+        ? resolveCorrectIndex(q.correct_answer, q.options)
+        : null;
+    return {
+      index,
+      type: q.type,
+      difficulty: q.difficulty,
+      claimed_chapter: q.chapter,
+      question_text: q.question_text,
+      // Options are labelled so the verifier cannot mis-map the answer letter.
+      options:
+        q.options?.map((o, i) => `${LETTERS[i] ?? i + 1}) ${o}`) ?? null,
+      stated_correct_answer: q.correct_answer,
+      // Spelled out explicitly to remove any letter/text ambiguity.
+      stated_correct_answer_text:
+        idx !== null && idx >= 0 && q.options ? q.options[idx] : null,
+      stated_solution: q.solution,
+    };
+  });
 
   const res = await client().chat.completions.create({
     model: VERIFIER_MODEL,
@@ -250,10 +261,59 @@ export async function analyzeReference(opts: {
 
 const LETTERS = ["A", "B", "C", "D"];
 
+const squash = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * Models sometimes return the option's full text (or "(B)", "B.") instead of a
+ * bare letter. Resolve any of those to an index; null means we could not tell,
+ * and the caller must flag the question for review rather than guess.
+ */
+export function resolveCorrectIndex(
+  answer: string,
+  options: string[]
+): number | null {
+  const trimmed = answer.trim();
+
+  const letterMatch = trimmed.match(/^\(?([A-Da-d])[).:]?$/);
+  if (letterMatch) return LETTERS.indexOf(letterMatch[1].toUpperCase());
+
+  const exact = options.findIndex((o) => squash(o) === squash(trimmed));
+  if (exact >= 0) return exact;
+
+  // Last resort: the model prefixed the text with its letter, e.g. "B) $12$".
+  const prefixed = trimmed.match(/^\(?([A-Da-d])[).:]\s+([\s\S]*)$/);
+  if (prefixed) {
+    const byText = options.findIndex((o) => squash(o) === squash(prefixed[2]));
+    if (byText >= 0) return byText;
+    return LETTERS.indexOf(prefixed[1].toUpperCase());
+  }
+
+  return null;
+}
+
+/**
+ * True when an option-based question's answer is still not a clean A–D letter
+ * after normalization — the teacher must pick the right option themselves.
+ */
+export function hasUnresolvedAnswer(q: {
+  type: QuestionType;
+  options?: string[] | null;
+  correct_answer: string;
+}): boolean {
+  if (q.type === "numerical") return false;
+  if (!q.options || q.options.length === 0) return true;
+  return !LETTERS.includes(q.correct_answer.trim().toUpperCase());
+}
+
 export function shuffleMcqOptions(raw: RawQuestion): RawQuestion {
-  if (raw.type !== "mcq" || !raw.options || raw.options.length !== 4) return raw;
-  const correctIdx = LETTERS.indexOf(raw.correct_answer.trim().toUpperCase());
-  if (correctIdx < 0) return raw;
+  if (raw.type === "numerical" || !raw.options || raw.options.length !== 4) return raw;
+  const correctIdx = resolveCorrectIndex(raw.correct_answer, raw.options);
+  if (correctIdx === null || correctIdx < 0) return raw;
+
+  // Assertion–Reason options are a fixed, ordered set — never reorder them.
+  if (raw.type === "assertion_reason") {
+    return { ...raw, correct_answer: LETTERS[correctIdx] };
+  }
 
   const order = [0, 1, 2, 3];
   for (let i = order.length - 1; i > 0; i--) {

@@ -4,6 +4,7 @@ import { getApiUser, jsonError, logUsage } from "@/lib/api";
 import { nextBatchSlots, toAvoidList } from "@/lib/ai/plan";
 import {
   generateQuestions,
+  hasUnresolvedAnswer,
   shuffleMcqOptions,
   verifyQuestions,
 } from "@/lib/ai/generate";
@@ -73,6 +74,14 @@ export async function POST(
 
     const newQuestions: Question[] = shuffled.map((raw, i) => {
       const verdict = verification.verdicts.find((v) => v.index === i);
+      const unresolved = hasUnresolvedAnswer(raw);
+      const reasons = [
+        verdict && !verdict.ok ? verdict.reason : null,
+        unresolved
+          ? "The correct option could not be determined automatically — please select the right answer yourself."
+          : null,
+      ].filter(Boolean);
+
       return {
         id: randomUUID(),
         type: raw.type,
@@ -84,8 +93,8 @@ export async function POST(
         solution: raw.solution,
         marks: paper.settings.marks_per_question,
         negative_marks: paper.settings.negative_marks,
-        needs_review: verdict ? !verdict.ok : true,
-        review_reason: verdict && !verdict.ok ? verdict.reason : undefined,
+        needs_review: !verdict || !verdict.ok || unresolved,
+        review_reason: reasons.length > 0 ? reasons.join(" ") : undefined,
       };
     });
 
