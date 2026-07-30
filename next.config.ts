@@ -5,12 +5,15 @@ const nextConfig: NextConfig = {
   // route, so they must be traced into the serverless bundle explicitly.
   serverExternalPackages: ["puppeteer-core", "@sparticuz/chromium"],
   outputFileTracingIncludes: {
-    "/api/papers/[id]/export-pdf": [
+    // Keys are matched with picomatch, so the dynamic segment's brackets must
+    // be escaped — unescaped, "[id]" is read as a character class and the rule
+    // silently never matches this route.
+    "/api/papers/\\[id\\]/export-pdf": [
       "./node_modules/katex/dist/katex.min.css",
-      "./node_modules/katex/dist/fonts/**",
+      "./node_modules/katex/dist/fonts/**/*",
       // The brotli-packed Chromium build (~67 MB) is loaded from disk at
       // runtime; tracing cannot infer it because the path is built dynamically.
-      "./node_modules/@sparticuz/chromium/bin/**",
+      "./node_modules/@sparticuz/chromium/bin/**/*",
     ],
   },
 };
