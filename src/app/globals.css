@@ -74,6 +74,10 @@ body {
   .badge {
     @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
   }
+  /* Placeholder block for loading.tsx skeletons. */
+  .skeleton {
+    @apply animate-pulse rounded bg-line;
+  }
 }
 
 /* KaTeX sizing inside question text */

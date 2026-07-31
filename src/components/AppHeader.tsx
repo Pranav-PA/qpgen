@@ -1,6 +1,27 @@
 import Link from "next/link";
 import type { Profile } from "@/lib/types";
 
+/**
+ * Rendered while the profile is still in flight. Matches the real header's
+ * height exactly so the swap does not shift the page.
+ */
+export function AppHeaderSkeleton() {
+  return (
+    <header className="no-print bg-surface border-b border-line sticky top-0 z-20">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-6">
+        <span className="font-semibold text-foreground">
+          QP<span className="text-accent">Gen</span>
+        </span>
+        <div className="flex-1" />
+        <div
+          className="h-4 w-28 rounded bg-line animate-pulse"
+          aria-hidden
+        />
+      </div>
+    </header>
+  );
+}
+
 export default function AppHeader({ profile }: { profile: Profile }) {
   return (
     <header className="no-print bg-surface border-b border-line sticky top-0 z-20">
