@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import MathText from "@/components/MathText";
+import SupportPrompt from "@/components/support/SupportPrompt";
 import { groupBySection } from "@/lib/sections";
 import {
   QUESTION_TYPE_LABELS,
@@ -23,6 +24,7 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
   const [notice, setNotice] = useState("");
   const [continuing, setContinuing] = useState(false);
   const [busyExport, setBusyExport] = useState<string | null>(null);
+  const [exported, setExported] = useState(false);
 
   const flaggedCount = questions.filter((q) => q.needs_review).length;
   const remaining = paper.settings.question_count - questions.length;
@@ -96,6 +98,7 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
       );
       // Top-level navigation to an attachment downloads without navigating away.
       window.location.href = pdfUrl(doc);
+      setExported(true);
     } finally {
       setBusyExport(null);
     }
@@ -278,9 +281,10 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
                 <a
                   className="btn-primary text-xs"
                   href={pdfUrl(doc)}
-                  onClick={() =>
-                    setNotice("Preparing your PDF — the download starts in a few seconds.")
-                  }
+                  onClick={() => {
+                    setNotice("Preparing your PDF — the download starts in a few seconds.");
+                    setExported(true);
+                  }}
                 >
                   ⬇ Download PDF
                 </a>
@@ -293,6 +297,7 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
           first download after a quiet spell takes a few seconds while the
           renderer warms up.
         </p>
+        <SupportPrompt show={exported} />
       </div>
     </div>
   );

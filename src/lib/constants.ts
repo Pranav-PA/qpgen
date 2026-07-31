@@ -52,6 +52,27 @@ export function estimateCostUsd(
   return (inputTokens * p.input + outputTokens * p.output) / 1_000_000;
 }
 
+// ---------------- Support / voluntary contributions ----------------
+// QPGen is free and ungated; these fund the domain and the AI bill. The VPA is
+// env-overridable so changing the receiving account never needs a code change.
+
+export const UPI_VPA = process.env.NEXT_PUBLIC_UPI_VPA || "8147238214@upi";
+export const UPI_PAYEE_NAME =
+  process.env.NEXT_PUBLIC_UPI_PAYEE_NAME || "QPGen";
+
+/** Static rate for showing USD API costs in rupees. No live FX call. */
+export const USD_TO_INR = Number(process.env.USD_TO_INR) || 88;
+
+/** Recurring running costs, in rupees. Edit as they change. */
+export const FIXED_COSTS_INR: {
+  label: string;
+  amount: number;
+  period: string;
+}[] = [
+  { label: "Domain name", amount: 1000, period: "per year" },
+  { label: "Hosting", amount: 0, period: "free tier, for now" },
+];
+
 export const DEFAULT_INSTRUCTIONS = `1. All questions are compulsory unless stated otherwise.
 2. Use of calculators and electronic devices is not permitted.
 3. Rough work must be done in the space provided in the answer booklet.

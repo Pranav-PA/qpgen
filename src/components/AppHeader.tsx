@@ -23,6 +23,13 @@ export default function AppHeader({ profile }: { profile: Profile }) {
               Admin
             </Link>
           )}
+          {/* Deliberately de-emphasised: a side note, not a fifth feature. */}
+          <Link
+            href="/support"
+            className="px-3 py-1.5 rounded-lg hover:bg-background text-muted/70 hover:text-foreground text-xs"
+          >
+            ♥ Support
+          </Link>
         </nav>
         <div className="flex items-center gap-3">
           <span className="text-sm text-muted hidden sm:inline" title={profile.email}>
