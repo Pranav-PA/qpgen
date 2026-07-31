@@ -2,21 +2,12 @@
 
 import Image from "next/image";
 import { useRef, useState } from "react";
-import { upiPayUrl, formatInr } from "@/lib/upi";
-
-const PRESETS = [100, 250, 500];
 
 /**
  * The VPA arrives as a prop rather than being imported from constants so that
  * no server-side env reads end up in the client bundle.
  */
-export default function UpiPanel({
-  vpa,
-  payeeName,
-}: {
-  vpa: string;
-  payeeName: string;
-}) {
+export default function UpiPanel({ vpa }: { vpa: string }) {
   const [status, setStatus] = useState<"idle" | "copied" | "manual">("idle");
   const vpaRef = useRef<HTMLElement>(null);
 
@@ -45,50 +36,20 @@ export default function UpiPanel({
     }
   }
 
-  const link = (amount?: number) =>
-    upiPayUrl({ vpa, payee: payeeName, amount, note: "QPGen" });
-
   return (
     <div className="card p-6">
-      <div className="grid sm:grid-cols-[auto_1fr] gap-6 items-start">
-        {/* QR: the desktop path — scan it with the phone in your hand. */}
-        <div className="order-2 sm:order-1 mx-auto sm:mx-0">
-          <Image
-            src="/upi-qr.png"
-            alt={`UPI QR code for ${vpa}`}
-            width={180}
-            height={180}
-            className="rounded-lg border border-line bg-white"
-            unoptimized
-          />
-          <p className="text-xs text-muted text-center mt-2">
-            Scan with any UPI app
-          </p>
-        </div>
+      <div className="flex flex-col items-center gap-5">
+        <Image
+          src="/upi-qr.png"
+          alt={`UPI QR code for ${vpa}`}
+          width={200}
+          height={200}
+          className="rounded-lg border border-line bg-white"
+          unoptimized
+        />
+        <p className="text-sm text-muted -mt-2">Scan with any UPI app</p>
 
-        <div className="order-1 sm:order-2 min-w-0">
-          {/* Mobile path: you cannot scan a QR that is on the same screen. */}
-          <p className="label">On your phone</p>
-          <div className="flex flex-wrap gap-2 mb-2">
-            {/* Sized for thumbs: this is the primary path on a phone. */}
-            {PRESETS.map((amount) => (
-              <a
-                key={amount}
-                href={link(amount)}
-                className="btn-secondary min-h-11 px-5"
-              >
-                {formatInr(amount)}
-              </a>
-            ))}
-            <a href={link()} className="btn-secondary min-h-11 px-5">
-              Any amount
-            </a>
-          </div>
-          <p className="help mb-5">
-            Opens GPay, PhonePe, Paytm or whichever UPI app you have. These
-            buttons only work on a phone.
-          </p>
-
+        <div className="w-full max-w-sm">
           <p className="label">Or use the UPI ID</p>
           <div className="flex items-stretch gap-2">
             <code
