@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 /**
  * Numeric field that stays editable while you type.
@@ -34,11 +34,18 @@ export default function NumberInput({
 }) {
   const [text, setText] = useState(String(value));
   const [focused, setFocused] = useState(false);
+  const [seenValue, setSeenValue] = useState(value);
 
-  // Track external changes (e.g. "reuse last paper's setup") while not typing.
-  useEffect(() => {
+  /*
+   * Track external changes (e.g. "reuse last paper's setup") while not typing.
+   * Adjusting during render rather than in an effect: an effect would paint the
+   * stale number first and then correct it, and re-running on every keystroke
+   * made it a cascading render.
+   */
+  if (value !== seenValue) {
+    setSeenValue(value);
     if (!focused) setText(String(value));
-  }, [value, focused]);
+  }
 
   function commit(raw: string) {
     const parsed = Number(raw);

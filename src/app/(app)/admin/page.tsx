@@ -15,14 +15,31 @@ import AdminPanel, {
 export const metadata = { title: "Admin" };
 export const dynamic = "force-dynamic";
 
+/**
+ * Clock reads live outside the component body. Reading the time during render
+ * is exactly the impurity the compiler objects to, and hoisting it here keeps
+ * every window in one call so the 30d, 14d and today boundaries cannot land on
+ * different milliseconds.
+ */
+function timeWindows() {
+  const now = Date.now();
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  return {
+    since30d: new Date(now - 30 * 864e5).toISOString(),
+    since14d: new Date(now - 14 * 864e5).toISOString(),
+    todayStart,
+    trendDays: Array.from({ length: 14 }, (_, i) =>
+      new Date(now - (13 - i) * 864e5).toISOString().slice(0, 10)
+    ),
+  };
+}
+
 export default async function AdminPage() {
   await requireAdmin();
   const admin = createAdminClient();
 
-  const since30d = new Date(Date.now() - 30 * 864e5).toISOString();
-  const since14d = new Date(Date.now() - 14 * 864e5).toISOString();
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+  const { since30d, since14d, todayStart, trendDays } = timeWindows();
 
   const [
     { count: totalUsers },
@@ -74,12 +91,10 @@ export default async function AdminPage() {
   const imageCfg = await getImageConfig();
 
   // 14-day generation trend, computed from the 30d log slice.
-  const trend: { date: string; count: number }[] = [];
-  for (let i = 13; i >= 0; i--) {
-    const day = new Date(Date.now() - i * 864e5);
-    const key = day.toISOString().slice(0, 10);
-    trend.push({ date: key, count: 0 });
-  }
+  const trend: { date: string; count: number }[] = trendDays.map((date) => ({
+    date,
+    count: 0,
+  }));
   const trendMap = new Map(trend.map((t) => [t.date, t]));
   let cost30d = 0;
   for (const log of logs30d ?? []) {
