@@ -68,6 +68,44 @@ export async function getAiProvider(): Promise<ProviderName> {
   return wanted;
 }
 
+/**
+ * Figure settings, admin-controlled at runtime.
+ *
+ * SVG costs nothing beyond the tokens it occupies, so it is separate from
+ * raster: an admin watching the bill can switch raster off or down to the
+ * cheap model without losing circuit and graph diagrams entirely.
+ */
+export type RasterMode = "high" | "low" | "off";
+export interface ImageConfig {
+  svg: boolean;
+  raster: RasterMode;
+}
+
+export const DEFAULT_IMAGE_CONFIG: ImageConfig = { svg: true, raster: "high" };
+
+export async function getImageConfig(): Promise<ImageConfig> {
+  try {
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from("app_config")
+      .select("value")
+      .eq("key", "images")
+      .maybeSingle();
+    const v = data?.value as Partial<ImageConfig> | null;
+    if (!v) return DEFAULT_IMAGE_CONFIG;
+    return {
+      svg: typeof v.svg === "boolean" ? v.svg : DEFAULT_IMAGE_CONFIG.svg,
+      raster:
+        v.raster === "high" || v.raster === "low" || v.raster === "off"
+          ? v.raster
+          : DEFAULT_IMAGE_CONFIG.raster,
+    };
+  } catch {
+    // A config read failure must not stop generation; fall back to defaults.
+    return DEFAULT_IMAGE_CONFIG;
+  }
+}
+
 export async function logUsage(entry: {
   user_id: string;
   action: "generate_batch" | "regenerate_question" | "verify_batch" | "analyze_reference" | "export";

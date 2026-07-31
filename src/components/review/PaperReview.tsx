@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import MathText from "@/components/MathText";
+import QuestionFigure from "@/components/QuestionFigure";
 import SupportPrompt from "@/components/support/SupportPrompt";
 import { groupBySection } from "@/lib/sections";
 import {
@@ -506,6 +507,7 @@ function QuestionCard({
           <p className="leading-relaxed">
             <MathText text={q.question_text} />
           </p>
+          <QuestionFigure figure={q.figure} />
           {isMcqLike && q.options && (
             <ol className="mt-3 space-y-1.5">
               {q.options.map((opt, oi) => (

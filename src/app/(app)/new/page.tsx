@@ -1,4 +1,5 @@
 import { requireUser } from "@/lib/auth";
+import { getImageConfig } from "@/lib/api";
 import NewPaperWizard from "@/components/new-paper/NewPaperWizard";
 import type { InstitutionDetails, PaperSettings } from "@/lib/types";
 
@@ -16,12 +17,15 @@ export default async function NewPaperPage() {
     .limit(1)
     .maybeSingle<{ settings: PaperSettings; institution_details: InstitutionDetails }>();
 
+  const images = await getImageConfig();
+
   return (
     <NewPaperWizard
       institutionDefaults={profile.institution_defaults}
       lastSettings={lastPaper?.settings ?? null}
       lastInstitution={lastPaper?.institution_details ?? null}
       userId={user.id}
+      images={images}
     />
   );
 }

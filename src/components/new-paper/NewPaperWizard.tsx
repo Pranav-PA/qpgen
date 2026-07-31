@@ -61,11 +61,13 @@ export default function NewPaperWizard({
   lastSettings,
   lastInstitution,
   userId,
+  images,
 }: {
   institutionDefaults: Partial<InstitutionDetails> | null;
   lastSettings: PaperSettings | null;
   lastInstitution: InstitutionDetails | null;
   userId: string;
+  images: { svg: boolean; raster: "high" | "low" | "off" };
 }) {
   const router = useRouter();
   const [step, setStep] = useState(1);
@@ -419,6 +421,7 @@ export default function NewPaperWizard({
             onExtraInstructions={(v) =>
               setSettings((s) => ({ ...s, extra_instructions: v }))
             }
+            images={images}
             title={title}
             settings={settings}
             maxMarks={effectiveMaxMarks}
@@ -884,6 +887,7 @@ function StepReference({
   onClear,
   extraInstructions,
   onExtraInstructions,
+  images,
   title,
   settings,
   maxMarks,
@@ -895,6 +899,7 @@ function StepReference({
   onClear: () => void;
   extraInstructions: string;
   onExtraInstructions: (v: string) => void;
+  images: { svg: boolean; raster: "high" | "low" | "off" };
   title: string;
   settings: PaperSettings;
   maxMarks: number;
@@ -975,6 +980,25 @@ function StepReference({
           This narrows what gets generated — it cannot change the chapters,
           question count or marks you set earlier.
         </p>
+
+        {/* Set by an administrator, usually to control cost. Say so plainly
+            rather than letting diagrams quietly not appear. */}
+        {!images.svg && images.raster === "off" ? (
+          <p className="help mt-3 text-warn">
+            Diagrams are currently switched off, so questions will be
+            text-only. You can still add your own images while reviewing.
+          </p>
+        ) : images.raster === "off" ? (
+          <p className="help mt-3">
+            Generated pictures are currently off. Drawn diagrams — circuits,
+            graphs, ray diagrams — are still available.
+          </p>
+        ) : images.raster === "low" ? (
+          <p className="help mt-3">
+            Generated pictures are running on the low-cost model at the moment,
+            so image quality may be rougher than usual.
+          </p>
+        ) : null}
       </div>
 
       <div className="border-t border-line pt-5">

@@ -1,6 +1,14 @@
 import { hasOptions } from "@/lib/types";
-import type { Difficulty, PaperSettings, Question, QuestionType, ReferencePage } from "@/lib/types";
+import type {
+  Difficulty,
+  PaperSettings,
+  Question,
+  QuestionFigure,
+  QuestionType,
+  ReferencePage,
+} from "@/lib/types";
 import { repairMisescapedLatex } from "@/lib/text-repair";
+import { sanitizeSvg } from "@/lib/svg-sanitize";
 import { runAi, type ProviderName, type Usage } from "./providers";
 import {
   BLUEPRINT_EXTRACTION_PROMPT,
@@ -29,6 +37,8 @@ interface RawQuestion {
   options: string[] | null;
   correct_answer: string;
   solution: string;
+  /** Sanitised in normalizeRaw; null once the allowlist has rejected it. */
+  figure?: QuestionFigure | null;
 }
 
 export interface Verdict {
@@ -60,7 +70,7 @@ const questionsSchema = {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["type", "difficulty", "chapter", "question_text", "options", "correct_answer", "solution"],
+          required: ["type", "difficulty", "chapter", "question_text", "options", "correct_answer", "solution", "figure"],
           properties: {
             type: {
               type: "string",
@@ -79,6 +89,20 @@ const questionsSchema = {
             options: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] },
             correct_answer: { type: "string" },
             solution: { type: "string" },
+            figure: {
+              anyOf: [
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["svg", "caption"],
+                  properties: {
+                    svg: { type: "string" },
+                    caption: { type: "string" },
+                  },
+                },
+                { type: "null" },
+              ],
+            },
           },
         },
       },
@@ -136,12 +160,37 @@ function teacherInstructionBlock(instructions: string): string {
   ].join("\n");
 }
 
+/**
+ * Asked for only when figures are enabled, so a paper that does not want
+ * diagrams never spends tokens describing how to draw them.
+ */
+const FIGURE_INSTRUCTIONS = [
+  "\nDiagrams: a question that cannot be answered without seeing something —",
+  "a circuit, a ray diagram, a labelled graph, a force diagram, an apparatus",
+  "setup — may carry a figure. Set \"figure\" to null for every other question,",
+  "which will be most of them. Never draw decoration.",
+  "",
+  "When you do draw, put plain SVG markup in figure.svg:",
+  "- Open with <svg viewBox=\"0 0 W H\"> and size it for a printed page (roughly",
+  "  300-500 units wide). Do not set width or height in pixels.",
+  "- Use only: path, line, polyline, polygon, rect, circle, ellipse, text,",
+  "  tspan, g, defs, marker, linearGradient, radialGradient, stop.",
+  "- Label parts with <text>. The figure prints in black and white, so rely on",
+  "  shape and labels rather than colour, and keep stroke widths >= 1.5.",
+  "- No <image>, <use>, <script>, <style>, <foreignObject>, no href of any kind,",
+  "  and no external references. Anything containing them is discarded whole.",
+  "- Do not put LaTeX in the SVG; it will not render. Write plain characters.",
+  "Give figure.caption a short description of what is drawn, for accessibility.",
+].join("\n");
+
 export async function generateQuestions(opts: {
   settings: PaperSettings;
   slots: BatchSlot[];
   avoid: string[];
   styleNotes: string | null;
   provider: Provider;
+  /** Admin-controlled: when false the model is never asked for diagrams. */
+  figures?: boolean;
 }): Promise<{ questions: RawQuestion[]; usage: Usage }> {
   if (isMockAi()) return mockGenerate(opts.settings, opts.slots);
 
@@ -166,6 +215,11 @@ export async function generateQuestions(opts: {
   if (styleNotes) {
     userParts.push(`\nStyle profile from the teacher's reference paper — imitate this style and difficulty, but never copy questions:\n${styleNotes}`);
   }
+  userParts.push(
+    opts.figures
+      ? FIGURE_INSTRUCTIONS
+      : '\nDo not produce diagrams. Set "figure" to null on every question, and do not write questions that depend on seeing one.'
+  );
   if (settings.extra_instructions) {
     userParts.push(teacherInstructionBlock(settings.extra_instructions));
   }
@@ -211,8 +265,24 @@ function stripOptionLabels(options: string[] | null): string[] | null {
   return stripped.some((s) => s.length === 0) ? options : stripped;
 }
 
+/**
+ * Sanitising here rather than at render time means the cleaned markup is what
+ * gets stored, so every later consumer — review screen, print view, PDF —
+ * inherits the guarantee without repeating the check.
+ */
+function normalizeFigure(figure: QuestionFigure | null | undefined): QuestionFigure | null {
+  const svg = sanitizeSvg(figure?.svg);
+  if (!svg) return null;
+  const caption = figure?.caption?.trim();
+  return { svg, caption: caption ? caption.slice(0, 200) : undefined };
+}
+
 function normalizeRaw(raw: RawQuestion): RawQuestion {
-  return { ...raw, options: stripOptionLabels(raw.options) };
+  return {
+    ...raw,
+    options: stripOptionLabels(raw.options),
+    figure: normalizeFigure(raw.figure),
+  };
 }
 
 /**

@@ -40,6 +40,16 @@ export type Difficulty = "easy" | "medium" | "hard";
 export type PaperStatus = "draft" | "finalized";
 export type UserRole = "teacher" | "admin";
 
+/**
+ * A diagram drawn by the AI as SVG markup — circuits, ray diagrams, graphs.
+ * The markup is sanitised on arrival (see lib/svg-sanitize), so anything stored
+ * here has already been through the allowlist and is safe to inject.
+ */
+export interface QuestionFigure {
+  svg: string;
+  caption?: string;
+}
+
 export interface Question {
   id: string;
   type: QuestionType;
@@ -56,6 +66,12 @@ export interface Question {
   needs_review: boolean;
   /** Set by the verifier when needs_review is true. */
   review_reason?: string;
+  /**
+   * Diagram accompanying the question. No verifier can check whether a drawn
+   * circuit or diagram is actually correct, so a generated figure always sets
+   * needs_review — a teacher has to look at it.
+   */
+  figure?: QuestionFigure;
   /** True if the teacher wrote/edited this question by hand. */
   teacher_authored?: boolean;
   /** Blueprint papers only: which part of the paper this question belongs to. */

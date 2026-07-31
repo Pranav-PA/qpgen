@@ -108,6 +108,11 @@ header.letterhead.board .subjline {
 .q .stem { display: flex; gap: 7px; align-items: baseline; }
 .q .num { font-weight: bold; white-space: nowrap; }
 .q .marks { color: #555; font-size: 8.5pt; white-space: nowrap; }
+/* Figures sit under the stem, indented to the option column. Capped so a model
+   that emits an oversized viewBox cannot push a question onto its own page. */
+.fig { margin: 5px 0 5px 20px; break-inside: avoid; page-break-inside: avoid; }
+.fig svg { max-width: 62mm; max-height: 52mm; height: auto; display: block; }
+.fig figcaption { font-size: 8.5pt; color: #555; font-style: italic; margin-top: 2px; }
 .opts { margin-top: 3px; padding-left: 20px; }
 .opts.two-col { column-count: 2; column-gap: 26px; }
 .opt { margin: 1.5px 0; break-inside: avoid; }
@@ -204,11 +209,27 @@ function questionHtml(q: Question, index: number): string {
         .join("")}</div>`
     : "";
 
+  /*
+   * Inlined directly rather than fetched: render.ts loads the page from an
+   * in-memory string with no base URL and no network, so anything referenced
+   * by URL would silently not appear. SVG is markup, so it needs no data-URI
+   * step — it just has to be emitted here. The markup was allowlisted before
+   * storage (lib/svg-sanitize), so it carries no external references.
+   */
+  const figure = q.figure?.svg
+    ? `<figure class="fig">${q.figure.svg}${
+        q.figure.caption
+          ? `<figcaption>${escapeHtml(q.figure.caption)}</figcaption>`
+          : ""
+      }</figure>`
+    : "";
+
   return `<div class="q">
     <div class="stem">
       <span class="num">Q${index + 1}.</span>
       <span>${mathHtml(q.question_text)} <span class="marks">[${q.marks} mark${q.marks === 1 ? "" : "s"}]</span></span>
     </div>
+    ${figure}
     ${opts}
   </div>`;
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { getAiProvider, getApiUser, jsonError, logUsage } from "@/lib/api";
+import { getAiProvider, getApiUser, getImageConfig, jsonError, logUsage } from "@/lib/api";
 import { nextBatchSlots, toAvoidList } from "@/lib/ai/plan";
 import {
   generateQuestions,
@@ -58,12 +58,14 @@ export async function POST(
 
   try {
     const provider = await getAiProvider();
+    const images = await getImageConfig();
     const gen = await generateQuestions({
       settings: paper.settings,
       slots,
       avoid: avoid.slice(0, 80),
       styleNotes: paper.settings.style_notes ?? null,
       provider,
+      figures: images.svg,
     });
     await logUsage({ user_id: user.id, action: "generate_batch", usage: gen.usage });
 
@@ -80,10 +82,19 @@ export async function POST(
       const verdict = verification.verdicts.find((v) => v.index === i);
       const unresolved = hasUnresolvedAnswer(raw);
       const slot = slots[i];
+      /*
+       * The verifier reads text only — it cannot tell whether a drawn circuit
+       * is wired correctly or a graph is labelled right. A figure therefore
+       * always sends the question to review, regardless of the text verdict.
+       */
+      const hasFigure = !!raw.figure;
       const reasons = [
         verdict && !verdict.ok ? verdict.reason : null,
         unresolved
           ? "The correct option could not be determined automatically — please select the right answer yourself."
+          : null,
+        hasFigure
+          ? "This question has an AI-drawn diagram. Check it is accurate and readable before distributing."
           : null,
       ].filter(Boolean);
 
@@ -101,7 +112,8 @@ export async function POST(
         negative_marks: paper.settings.negative_marks,
         section_id: slot?.section_id,
         section_name: slot?.section_name,
-        needs_review: !verdict || !verdict.ok || unresolved,
+        figure: raw.figure ?? undefined,
+        needs_review: !verdict || !verdict.ok || unresolved || hasFigure,
         review_reason: reasons.length > 0 ? reasons.join(" ") : undefined,
       };
     });

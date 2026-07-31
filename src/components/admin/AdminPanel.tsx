@@ -40,6 +40,7 @@ export interface AdminData {
     default_user_daily_cap: number;
     generation_paused: boolean;
     ai_provider: "google" | "openai";
+    images: { svg: boolean; raster: "high" | "low" | "off" };
   };
   models: { google: string[]; openai: string[] };
   providerStatus: {
@@ -242,6 +243,8 @@ function ConfigSection({
   const [userCap, setUserCap] = useState(config.default_user_daily_cap);
   const [paused, setPaused] = useState(config.generation_paused);
   const [provider, setProvider] = useState(config.ai_provider);
+  const [svgOn, setSvgOn] = useState(config.images.svg);
+  const [raster, setRaster] = useState(config.images.raster);
   const [busy, setBusy] = useState(false);
 
   return (
@@ -292,6 +295,39 @@ function ConfigSection({
         )}
       </div>
 
+      <h2 className="font-semibold text-sm mb-3 border-t border-line pt-4">Diagrams</h2>
+      <div className="flex flex-wrap items-end gap-4 mb-6">
+        <label className="flex items-center gap-2 text-sm pb-2">
+          <input
+            type="checkbox"
+            checked={svgOn}
+            onChange={(e) => setSvgOn(e.target.checked)}
+          />
+          <span>Drawn diagrams (SVG)</span>
+        </label>
+        <div>
+          <label htmlFor="raster" className="label text-xs">
+            Generated images
+          </label>
+          <select
+            id="raster"
+            className="input w-52"
+            value={raster}
+            onChange={(e) => setRaster(e.target.value as "high" | "low" | "off")}
+          >
+            <option value="high">On — best quality</option>
+            <option value="low">On — low cost model</option>
+            <option value="off">Off</option>
+          </select>
+        </div>
+        <p className="help pb-2 basis-full">
+          Drawn diagrams cost only tokens, so they stay on even when generated
+          images are off. Generated images are billed per image — switch to the
+          low-cost model or off if the bill climbs. Teachers are told on the new
+          paper screen when either is unavailable.
+        </p>
+      </div>
+
       <h2 className="font-semibold text-sm mb-3 border-t border-line pt-4">Abuse protection</h2>
       <div className="flex flex-wrap items-end gap-4">
         <div>
@@ -317,6 +353,7 @@ function ConfigSection({
                 default_user_daily_cap: userCap,
                 generation_paused: paused,
                 ai_provider: provider,
+                images: { svg: svgOn, raster },
               })
             );
             setBusy(false);

@@ -1,5 +1,5 @@
 import { requireAdmin } from "@/lib/auth";
-import { getAiProvider } from "@/lib/api";
+import { getAiProvider, getImageConfig } from "@/lib/api";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
   DEFAULT_AI_PROVIDER,
@@ -71,6 +71,8 @@ export default async function AdminPage() {
     .eq("key", "ai")
     .maybeSingle();
 
+  const imageCfg = await getImageConfig();
+
   // 14-day generation trend, computed from the 30d log slice.
   const trend: { date: string; count: number }[] = [];
   for (let i = 13; i >= 0; i--) {
@@ -109,12 +111,13 @@ export default async function AdminPage() {
         global_daily_cap: 500,
         default_user_daily_cap: 10,
         generation_paused: false,
-      }) as Omit<AdminData["config"], "ai_provider">),
+      }) as Omit<AdminData["config"], "ai_provider" | "images">),
       ai_provider:
         ((aiCfg?.value as { provider?: string } | null)?.provider as
           | "google"
           | "openai"
           | undefined) ?? DEFAULT_AI_PROVIDER,
+      images: imageCfg,
     },
     models: {
       google: [GEMINI_GENERATION_MODEL, GEMINI_VERIFIER_MODEL],
