@@ -1,5 +1,13 @@
 # Moving Supabase from Seoul to Mumbai
 
+> **Done.** The database now runs in `ap-south-1` as project `qpgen-mumbai`
+> (`fbadjxjqdtxotedsxpbl`), and `vercel.json` pins functions to `bom1`. This was
+> a fresh start rather than a data copy: the old project held 3 test users and 3
+> papers, so the schema was rebuilt from `001_init.sql` and accounts were
+> recreated by signing up again. The notes below are kept for the next time a
+> region move comes up, and the dump/restore steps are what you would need if
+> there were real data to preserve.
+
 Why: the database currently runs in AWS `ap-northeast-2` (Seoul) while nearly
 every teacher using QPGen is in India. Vercel functions are pinned to `icn1`
 (Seoul) so they at least sit beside the database, but users still pay one
