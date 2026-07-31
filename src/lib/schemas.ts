@@ -87,6 +87,7 @@ export const paperSettingsSchema = z
     mode: z.enum(["simple", "blueprint"]).optional(),
     blueprint: blueprintSchema.optional(),
     style_notes: z.string().max(4000).optional(),
+    extra_instructions: z.string().trim().max(1000).optional(),
   })
   .refine((s) => s.mode !== "blueprint" || !!s.blueprint, {
     message: "Blueprint mode needs a blueprint.",

@@ -415,6 +415,10 @@ export default function NewPaperWizard({
               setRefPages([]);
               setRefInfo("");
             }}
+            extraInstructions={settings.extra_instructions ?? ""}
+            onExtraInstructions={(v) =>
+              setSettings((s) => ({ ...s, extra_instructions: v }))
+            }
             title={title}
             settings={settings}
             maxMarks={effectiveMaxMarks}
@@ -878,6 +882,8 @@ function StepReference({
   refBusy,
   onFile,
   onClear,
+  extraInstructions,
+  onExtraInstructions,
   title,
   settings,
   maxMarks,
@@ -887,6 +893,8 @@ function StepReference({
   refBusy: boolean;
   onFile: (f: File | undefined) => void;
   onClear: () => void;
+  extraInstructions: string;
+  onExtraInstructions: (v: string) => void;
   title: string;
   settings: PaperSettings;
   maxMarks: number;
@@ -938,6 +946,35 @@ function StepReference({
             ))}
           </div>
         )}
+      </div>
+
+      <div className="border-t border-line pt-5">
+        <label htmlFor="extra-instructions" className="font-semibold block mb-1">
+          Anything specific?{" "}
+          <span className="text-muted font-normal text-sm">(optional)</span>
+        </label>
+        <p className="text-sm text-muted mb-3">
+          {refPages.length > 0
+            ? "Tell the AI how to use your reference — which part to draw from, or what to leave out."
+            : "Tell the AI anything extra about the questions you want."}
+        </p>
+        <textarea
+          id="extra-instructions"
+          className="input min-h-20"
+          rows={3}
+          maxLength={1000}
+          value={extraInstructions}
+          onChange={(e) => onExtraInstructions(e.target.value)}
+          placeholder={
+            refPages.length > 0
+              ? "e.g. Only use questions from Section B. Keep the numerical style but change all the values."
+              : "e.g. Focus on application questions rather than definitions. No questions needing diagrams."
+          }
+        />
+        <p className="help mt-1">
+          This narrows what gets generated — it cannot change the chapters,
+          question count or marks you set earlier.
+        </p>
       </div>
 
       <div className="border-t border-line pt-5">

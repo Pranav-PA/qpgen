@@ -201,6 +201,13 @@ export interface PaperSettings {
   negative_marks: number;
   /** Style profile distilled from the teacher's reference PDF, if uploaded. */
   style_notes?: string;
+  /**
+   * Free-text steering written by the teacher — "only take questions from
+   * Section B", "skip diagram questions". Applies with or without a reference
+   * PDF. Untrusted content: it narrows what gets generated, it does not
+   * override the system prompt.
+   */
+  extra_instructions?: string;
   /** Absent on papers created before blueprint mode existed — treat as "simple". */
   mode?: "simple" | "blueprint";
   blueprint?: Blueprint;
