@@ -50,7 +50,21 @@ export async function POST(request: Request) {
   const { data: verdict, error: rpcError } = await admin.rpc("consume_generation", {
     p_user_id: user.id,
   });
-  if (rpcError) return jsonError("Could not check your generation quota. Please retry.", 500);
+  if (rpcError) {
+    // The cause matters and used to be discarded: a revoked grant, a missing
+    // function and a bad service-role key all surfaced as the same sentence
+    // with nothing recorded anywhere.
+    console.error("[papers/create] consume_generation failed:", {
+      message: rpcError.message,
+      details: rpcError.details,
+      hint: rpcError.hint,
+      code: rpcError.code,
+    });
+    return jsonError(
+      `Could not check your generation quota: ${rpcError.message}`,
+      500
+    );
+  }
   if (verdict !== "ok") {
     const m = LIMIT_MESSAGES[verdict as string] ?? LIMIT_MESSAGES.disabled;
     return jsonError(m.message, m.status);
