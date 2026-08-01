@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getApiUser, jsonError } from "@/lib/api";
 import { institutionSchema, questionTypeSchema } from "@/lib/schemas";
+import type { Question } from "@/lib/types";
 
 /**
  * z.object() strips any key not listed here by default — it does not error,
@@ -66,8 +67,44 @@ export async function PATCH(
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (body.title !== undefined) update.title = body.title;
   if (body.questions !== undefined) {
-    update.questions = body.questions;
-    update.question_count = body.questions.length;
+    /*
+     * Defence in depth, on top of the schema fix above. There is no UI
+     * control that removes a diagram while keeping the same question — the
+     * review screen can only delete a question outright or replace it
+     * entirely via regenerate, both of which legitimately change the id or
+     * drop the row. So if an incoming question shares an id with a
+     * currently-stored one that has a figure, and the incoming one does not,
+     * that is never an intentional edit — it is a bug in whatever produced
+     * this payload, known or not yet found. Refuse to let it through rather
+     * than trust every future caller to get this right.
+     */
+    const { data: current } = await supabase
+      .from("papers")
+      .select("questions")
+      .eq("id", id)
+      .maybeSingle<{ questions: Question[] }>();
+    const currentFigures = new Map(
+      (current?.questions ?? [])
+        .filter((q) => q.figure)
+        .map((q) => [q.id, q.figure])
+    );
+
+    let recovered = 0;
+    const questions = body.questions.map((q) => {
+      if (!q.figure && currentFigures.has(q.id)) {
+        recovered++;
+        return { ...q, figure: currentFigures.get(q.id) };
+      }
+      return q;
+    });
+    if (recovered > 0) {
+      console.error(
+        `[papers/PATCH] refused to drop figure on save: paper=${id} questions=${recovered}`
+      );
+    }
+
+    update.questions = questions;
+    update.question_count = questions.length;
   }
   if (body.institution_details !== undefined) update.institution_details = body.institution_details;
   if (body.status !== undefined) update.status = body.status;
