@@ -11,6 +11,8 @@ export const GENERATION_BATCH_SIZE = 6;
 export const MAX_REFERENCE_PDF_PAGES = 10;
 export const MAX_REFERENCE_PDF_MB = 20;
 export const MAX_LOGO_MB = 2;
+/** Each image is a real per-image bill (see lib/ai/images.ts), not a token cost — bounded so a paper's image spend has a hard ceiling. */
+export const MAX_FIGURE_QUESTIONS = 10;
 
 export const DEFAULT_DAILY_GENERATION_CAP = 10;
 export const GLOBAL_DAILY_GENERATION_CAP = 500;
@@ -51,6 +53,30 @@ export function estimateCostUsd(
   if (!p) return 0;
   return (inputTokens * p.input + outputTokens * p.output) / 1_000_000;
 }
+
+/**
+ * Question-diagram image models, one per admin quality tier. Chosen on
+ * 2026-08-01 by generating the same circuit on all three Gemini image models
+ * and comparing output: gemini-3-pro-image rendered onto what looked like a
+ * scanned textbook page and drew both the resistor and battery as plain
+ * rectangles, so despite costing 2x more and carrying the "Pro" name it is not
+ * used at all. gemini-3.1-flash-image drew a correct, clean circuit and is
+ * "high"; gemini-2.5-flash-image is usable but added unrequested
+ * current-direction arrows, and is the cheap "low" tier.
+ *
+ * These bill per output image, not per token, so they are separate from
+ * MODEL_PRICING/estimateCostUsd above. Source: ai.google.dev/gemini-api/docs
+ * /pricing, standard (non-batch) tier — re-verify before trusting the admin
+ * cost display or the wizard's per-paper estimate if it looks stale.
+ */
+export const IMAGE_MODEL_FOR_TIER: Record<"high" | "low", string> = {
+  high: "gemini-3.1-flash-image",
+  low: "gemini-2.5-flash-image",
+};
+export const IMAGE_COST_USD: Record<string, number> = {
+  "gemini-3.1-flash-image": 0.067,
+  "gemini-2.5-flash-image": 0.039,
+};
 
 // ---------------- Support / voluntary contributions ----------------
 // QPGen is free and ungated; contributions go towards the domain and the AI

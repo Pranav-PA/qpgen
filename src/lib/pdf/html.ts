@@ -111,7 +111,7 @@ header.letterhead.board .subjline {
 /* Figures sit under the stem, indented to the option column. Capped so a model
    that emits an oversized viewBox cannot push a question onto its own page. */
 .fig { margin: 5px 0 5px 20px; break-inside: avoid; page-break-inside: avoid; }
-.fig svg { max-width: 62mm; max-height: 52mm; height: auto; display: block; }
+.fig svg, .fig img { max-width: 62mm; max-height: 52mm; height: auto; display: block; }
 .fig figcaption { font-size: 8.5pt; color: #555; font-style: italic; margin-top: 2px; }
 .opts { margin-top: 3px; padding-left: 20px; }
 .opts.two-col { column-count: 2; column-gap: 26px; }
@@ -193,7 +193,11 @@ function letterheadHtml(
   </header>`;
 }
 
-function questionHtml(q: Question, index: number): string {
+function questionHtml(
+  q: Question,
+  index: number,
+  figureDataUris: Map<string, string>
+): string {
   const showOptions =
     hasOptions(q.type) && Array.isArray(q.options) && q.options.length > 0;
 
@@ -210,15 +214,24 @@ function questionHtml(q: Question, index: number): string {
     : "";
 
   /*
-   * Inlined directly rather than fetched: render.ts loads the page from an
-   * in-memory string with no base URL and no network, so anything referenced
-   * by URL would silently not appear. SVG is markup, so it needs no data-URI
-   * step — it just has to be emitted here. The markup was allowlisted before
-   * storage (lib/svg-sanitize), so it carries no external references.
+   * render.ts loads the page from an in-memory string with no base URL and no
+   * network, so a figure referenced only by its Supabase Storage URL would
+   * silently not appear. A raster figure's data URI is therefore pre-fetched
+   * for every question before this function runs (see questionPaperHtml) and
+   * looked up here by question id. If that fetch failed, the figure is
+   * omitted rather than breaking the page — the same fallback the institution
+   * logo already uses for the same reason.
+   *
+   * Legacy SVG figures need no such step: the markup was allowlisted before
+   * storage (lib/svg-sanitize) and is inlined directly.
    */
-  const figure = q.figure?.svg
-    ? `<figure class="fig">${q.figure.svg}${
-        q.figure.caption
+  const figureDataUri = q.figure?.image_url ? figureDataUris.get(q.id) : undefined;
+  const figureBody = figureDataUri
+    ? `<img src="${figureDataUri}" alt="${escapeHtml(q.figure?.caption || "Diagram")}"/>`
+    : q.figure?.svg;
+  const figure = figureBody
+    ? `<figure class="fig">${figureBody}${
+        q.figure?.caption
           ? `<figcaption>${escapeHtml(q.figure.caption)}</figcaption>`
           : ""
       }</figure>`
@@ -247,6 +260,18 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
   const inst = paper.institution_details;
   const boardStyle = isBlueprint(paper.settings);
 
+  // Fetched once, in parallel, up front — questionHtml stays a plain
+  // synchronous string-builder rather than threading async through every map().
+  const figureDataUris = new Map<string, string>();
+  await Promise.all(
+    paper.questions
+      .filter((q) => q.figure?.image_url)
+      .map(async (q) => {
+        const dataUri = await fetchImageAsDataUri(q.figure!.image_url!);
+        if (dataUri) figureDataUris.set(q.id, dataUri);
+      })
+  );
+
   const lines = inst.instructions
     .split("\n")
     .map((l) => l.trim())
@@ -271,7 +296,7 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
           const subHead = sub
             ? `<div class="subhead">${escapeHtml(sub)}</div>`
             : "";
-          return subHead + questionHtml(q, g.startIndex - 1 + i);
+          return subHead + questionHtml(q, g.startIndex - 1 + i, figureDataUris);
         })
         .join("");
       return head + qs;

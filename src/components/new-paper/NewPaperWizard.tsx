@@ -1,12 +1,15 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { renderPdfToImages } from "@/lib/pdf";
 import NumberInput from "@/components/NumberInput";
 import {
   DEFAULT_INSTRUCTIONS,
+  IMAGE_COST_USD,
+  IMAGE_MODEL_FOR_TIER,
+  MAX_FIGURE_QUESTIONS,
   MAX_LOGO_MB,
   MAX_QUESTIONS_PER_PAPER,
   MAX_REFERENCE_PDF_MB,
@@ -67,7 +70,7 @@ export default function NewPaperWizard({
   lastSettings: PaperSettings | null;
   lastInstitution: InstitutionDetails | null;
   userId: string;
-  images: { svg: boolean; raster: "high" | "low" | "off" };
+  images: { raster: "high" | "low" | "off" };
 }) {
   const router = useRouter();
   const [step, setStep] = useState(1);
@@ -119,6 +122,8 @@ export default function NewPaperWizard({
           : ` — ${settings.chapters[0]} +${settings.chapters.length - 1}`;
     return `${examLabel} ${settings.subject}${chapterPart}`;
   }, [settings]);
+
+  const wantsFigures = (settings.figure_questions ?? 0) > 0;
 
   function applyLastPaper() {
     if (lastSettings) setSettings(lastSettings);
@@ -237,6 +242,18 @@ export default function NewPaperWizard({
 
   /* ----------------------------- generation driver */
   async function generate() {
+    if (wantsFigures) {
+      const n = settings.figure_questions;
+      if (!n || n < 1) {
+        setStepError("Enter how many questions should have a diagram, or turn the option off.");
+        return;
+      }
+      if (n > settings.question_count) {
+        setStepError("Diagram questions can't outnumber the total questions.");
+        return;
+      }
+    }
+    setStepError("");
     setGen({ phase: "creating" });
     try {
       const createRes = await fetch("/api/papers/create", {
@@ -421,6 +438,7 @@ export default function NewPaperWizard({
             onExtraInstructions={(v) =>
               setSettings((s) => ({ ...s, extra_instructions: v }))
             }
+            setSettings={setSettings}
             images={images}
             title={title}
             settings={settings}
@@ -887,6 +905,7 @@ function StepReference({
   onClear,
   extraInstructions,
   onExtraInstructions,
+  setSettings,
   images,
   title,
   settings,
@@ -899,11 +918,15 @@ function StepReference({
   onClear: () => void;
   extraInstructions: string;
   onExtraInstructions: (v: string) => void;
-  images: { svg: boolean; raster: "high" | "low" | "off" };
+  setSettings: Dispatch<SetStateAction<PaperSettings>>;
+  images: { raster: "high" | "low" | "off" };
   title: string;
   settings: PaperSettings;
   maxMarks: number;
 }) {
+  const wantsFigures = (settings.figure_questions ?? 0) > 0;
+  const figureModel = images.raster !== "off" ? IMAGE_MODEL_FOR_TIER[images.raster] : null;
+  const figureCostEach = figureModel ? IMAGE_COST_USD[figureModel] ?? 0 : 0;
   const fileInput = useRef<HTMLInputElement>(null);
   return (
     <div className="space-y-6">
@@ -980,25 +1003,69 @@ function StepReference({
           This narrows what gets generated — it cannot change the chapters,
           question count or marks you set earlier.
         </p>
+      </div>
 
-        {/* Set by an administrator, usually to control cost. Say so plainly
-            rather than letting diagrams quietly not appear. */}
-        {!images.svg && images.raster === "off" ? (
-          <p className="help mt-3 text-warn">
-            Diagrams are currently switched off, so questions will be
-            text-only. You can still add your own images while reviewing.
+      <div className="border-t border-line pt-5">
+        <h2 className="font-semibold mb-1">Diagram questions</h2>
+        {images.raster === "off" ? (
+          <p className="text-sm text-muted">
+            Diagram questions are currently switched off by the administrator.
+            Every question will be text-only; you can still attach your own
+            image while reviewing a question afterwards.
           </p>
-        ) : images.raster === "off" ? (
-          <p className="help mt-3">
-            Generated pictures are currently off. Drawn diagrams — circuits,
-            graphs, ray diagrams — are still available.
-          </p>
-        ) : images.raster === "low" ? (
-          <p className="help mt-3">
-            Generated pictures are running on the low-cost model at the moment,
-            so image quality may be rougher than usual.
-          </p>
-        ) : null}
+        ) : (
+          <>
+            <p className="text-sm text-muted mb-3">
+              Some questions can carry an AI-generated diagram — a circuit, a
+              labelled figure, a graph. Unlike the rest of generation, each one
+              is billed per image, so you choose exactly how many.
+              {images.raster === "low" && (
+                <> Running on the low-cost model at the moment, so image
+                quality may be rougher than usual.</>
+              )}
+            </p>
+            <label className="flex items-center gap-2 text-sm mb-2">
+              <input
+                type="checkbox"
+                checked={wantsFigures}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setSettings((s) => ({
+                    ...s,
+                    figure_questions: checked
+                      ? Math.min(2, s.question_count, MAX_FIGURE_QUESTIONS)
+                      : undefined,
+                  }));
+                }}
+              />
+              <span>Include diagram questions</span>
+            </label>
+            {wantsFigures && (
+              <div className="flex items-center gap-3">
+                <label htmlFor="figure-count" className="label text-xs">
+                  How many of the {settings.question_count} questions?
+                </label>
+                <NumberInput
+                  id="figure-count"
+                  className="input w-24"
+                  value={settings.figure_questions ?? 1}
+                  min={1}
+                  max={Math.min(settings.question_count, MAX_FIGURE_QUESTIONS)}
+                  fallback={1}
+                  onChange={(n) =>
+                    setSettings((s) => ({ ...s, figure_questions: n }))
+                  }
+                />
+                {figureModel && (
+                  <span className="help">
+                    ≈ ${(figureCostEach * (settings.figure_questions ?? 0)).toFixed(2)}{" "}
+                    for this paper&apos;s images
+                  </span>
+                )}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <div className="border-t border-line pt-5">

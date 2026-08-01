@@ -41,12 +41,19 @@ export type PaperStatus = "draft" | "finalized";
 export type UserRole = "teacher" | "admin";
 
 /**
- * A diagram drawn by the AI as SVG markup — circuits, ray diagrams, graphs.
- * The markup is sanitised on arrival (see lib/svg-sanitize), so anything stored
- * here has already been through the allowlist and is safe to inject.
+ * A diagram accompanying a question.
+ *
+ * `svg` is legacy: earlier generations had the text model draw markup
+ * directly, sanitised on arrival (see lib/svg-sanitize) before storage. New
+ * generations produce `image_url` instead — a Gemini image model renders a
+ * raster figure from a spec the text model wrote, uploaded to the
+ * question-images bucket. Both fields are optional and mutually exclusive in
+ * practice; renderers should check `image_url` first, then fall back to
+ * `svg`, so old papers keep rendering their figures unchanged.
  */
 export interface QuestionFigure {
-  svg: string;
+  svg?: string;
+  image_url?: string;
   caption?: string;
 }
 
@@ -224,6 +231,13 @@ export interface PaperSettings {
    * override the system prompt.
    */
   extra_instructions?: string;
+  /**
+   * Count of questions that must carry an AI-generated diagram. Opt-in and
+   * mandatory once checked (see the wizard) — unlike SVG figures, each of
+   * these is a real per-image bill, so the count is a hard ceiling on cost,
+   * not a hint to the model.
+   */
+  figure_questions?: number;
   /** Absent on papers created before blueprint mode existed — treat as "simple". */
   mode?: "simple" | "blueprint";
   blueprint?: Blueprint;

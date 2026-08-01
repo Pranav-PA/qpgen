@@ -9,6 +9,7 @@ import {
   stripSectionPrefix,
   verifyQuestions,
 } from "@/lib/ai/generate";
+import { generateQuestionImage, uploadQuestionImage } from "@/lib/ai/images";
 import type { Paper, Question } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -65,7 +66,7 @@ export async function POST(
       avoid: avoid.slice(0, 80),
       styleNotes: paper.settings.style_notes ?? null,
       provider,
-      figures: images.svg,
+      figures: images.raster !== "off",
     });
     await logUsage({ user_id: user.id, action: "generate_batch", usage: gen.usage });
 
@@ -78,45 +79,99 @@ export async function POST(
     });
     await logUsage({ user_id: user.id, action: "verify_batch", usage: verification.usage });
 
-    const newQuestions: Question[] = shuffled.map((raw, i) => {
-      const verdict = verification.verdicts.find((v) => v.index === i);
-      const unresolved = hasUnresolvedAnswer(raw);
-      const slot = slots[i];
-      /*
-       * The verifier reads text only — it cannot tell whether a drawn circuit
-       * is wired correctly or a graph is labelled right. A figure therefore
-       * always sends the question to review, regardless of the text verdict.
-       */
-      const hasFigure = !!raw.figure;
-      const reasons = [
-        verdict && !verdict.ok ? verdict.reason : null,
-        unresolved
-          ? "The correct option could not be determined automatically — please select the right answer yourself."
-          : null,
-        hasFigure
-          ? "This question has an AI-drawn diagram. Check it is accurate and readable before distributing."
-          : null,
-      ].filter(Boolean);
+    const newQuestions: Question[] = await Promise.all(
+      shuffled.map(async (raw, i) => {
+        const verdict = verification.verdicts.find((v) => v.index === i);
+        const unresolved = hasUnresolvedAnswer(raw);
+        const slot = slots[i];
+        const questionId = randomUUID();
 
-      return {
-        id: randomUUID(),
-        type: slot?.type ?? raw.type,
-        difficulty: raw.difficulty,
-        // In blueprint mode the chapter is dictated by the grid, not the model.
-        chapter: slot?.chapter ?? raw.chapter,
-        question_text: stripSectionPrefix(raw.question_text, slot?.section_name),
-        options: raw.options ?? undefined,
-        correct_answer: raw.correct_answer,
-        solution: raw.solution,
-        marks: slot?.marks ?? paper.settings.marks_per_question,
-        negative_marks: paper.settings.negative_marks,
-        section_id: slot?.section_id,
-        section_name: slot?.section_name,
-        figure: raw.figure ?? undefined,
-        needs_review: !verdict || !verdict.ok || unresolved || hasFigure,
-        review_reason: reasons.length > 0 ? reasons.join(" ") : undefined,
-      };
-    });
+        /*
+         * Rendering happens per-question and is caught locally: an image
+         * failure must not fail the whole batch, since a batch has up to 6
+         * questions and typically only one wants a diagram. The question
+         * keeps its text either way; only whether it carries an image
+         * differs, and needs_review explains which happened.
+         */
+        let imageUrl: string | undefined;
+        let imageFailed = false;
+        if (raw.figure_spec && images.raster !== "off") {
+          try {
+            const rendered = await generateQuestionImage({
+              spec: raw.figure_spec,
+              raster: images.raster,
+            });
+            if (rendered) {
+              imageUrl =
+                (await uploadQuestionImage({
+                  userId: user.id,
+                  paperId: id,
+                  questionId,
+                  bytes: rendered.bytes,
+                  mimeType: rendered.mimeType,
+                })) ?? undefined;
+              await logUsage({
+                user_id: user.id,
+                action: "generate_image",
+                usage: rendered.usage,
+                success: !!imageUrl,
+              });
+              if (!imageUrl) imageFailed = true;
+            } else {
+              imageFailed = true;
+            }
+          } catch (imgErr) {
+            imageFailed = true;
+            await logUsage({
+              user_id: user.id,
+              action: "generate_image",
+              success: false,
+              error_message: imgErr instanceof Error ? imgErr.message : "unknown",
+            });
+          }
+        }
+
+        /*
+         * The verifier reads text only — it cannot tell whether a rendered
+         * circuit is wired correctly or a labelled figure is labelled right.
+         * A question that got its diagram therefore always goes to review,
+         * regardless of the text verdict.
+         */
+        const reasons = [
+          verdict && !verdict.ok ? verdict.reason : null,
+          unresolved
+            ? "The correct option could not be determined automatically — please select the right answer yourself."
+            : null,
+          imageUrl
+            ? "This question has an AI-generated diagram. Check it is accurate and readable before distributing."
+            : null,
+          imageFailed
+            ? "A diagram was requested for this question but could not be generated — it was kept as text-only."
+            : null,
+        ].filter(Boolean);
+
+        return {
+          id: questionId,
+          type: slot?.type ?? raw.type,
+          difficulty: raw.difficulty,
+          // In blueprint mode the chapter is dictated by the grid, not the model.
+          chapter: slot?.chapter ?? raw.chapter,
+          question_text: stripSectionPrefix(raw.question_text, slot?.section_name),
+          options: raw.options ?? undefined,
+          correct_answer: raw.correct_answer,
+          solution: raw.solution,
+          marks: slot?.marks ?? paper.settings.marks_per_question,
+          negative_marks: paper.settings.negative_marks,
+          section_id: slot?.section_id,
+          section_name: slot?.section_name,
+          figure: imageUrl
+            ? { image_url: imageUrl, caption: raw.figure_spec?.slice(0, 150) }
+            : undefined,
+          needs_review: !verdict || !verdict.ok || unresolved || !!imageUrl || imageFailed,
+          review_reason: reasons.length > 0 ? reasons.join(" ") : undefined,
+        };
+      })
+    );
 
     const all = [...existing, ...newQuestions];
     const { error: updateError } = await supabase

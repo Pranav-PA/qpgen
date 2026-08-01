@@ -78,9 +78,25 @@ function difficultySequence(n: number, d: DifficultySettings): Difficulty[] {
   ];
 }
 
+/**
+ * Marks `count` slots, spread evenly across the whole paper, as needing a
+ * diagram. Spread rather than front-loaded so a single generation batch never
+ * has to make more than one or two image calls — each is a real network round
+ * trip on top of the question-generation call.
+ */
+function distributeFigureSlots(slots: BatchSlot[], count: number): BatchSlot[] {
+  if (count <= 0 || slots.length === 0) return slots;
+  const n = Math.min(count, slots.length);
+  const marked = new Set<number>();
+  for (let i = 0; i < n; i++) {
+    marked.add(Math.floor(((i + 0.5) * slots.length) / n));
+  }
+  return slots.map((s, i) => (marked.has(i) ? { ...s, wants_figure: true } : s));
+}
+
 export function fullPlan(settings: PaperSettings): BatchSlot[] {
   if (settings.mode === "blueprint" && settings.blueprint) {
-    return blueprintPlan(settings);
+    return distributeFigureSlots(blueprintPlan(settings), settings.figure_questions ?? 0);
   }
 
   const n = settings.question_count;
@@ -117,7 +133,10 @@ export function fullPlan(settings: PaperSettings): BatchSlot[] {
       ? difficulties.map((_, i) => (["mcq", "mcq", "numerical", "assertion_reason"] as QuestionType[])[i % 4])
       : difficulties.map(() => settings.question_type as QuestionType);
 
-  return difficulties.map((difficulty, i) => ({ difficulty, type: types[i] }));
+  return distributeFigureSlots(
+    difficulties.map((difficulty, i) => ({ difficulty, type: types[i] })),
+    settings.figure_questions ?? 0
+  );
 }
 
 /** Slots for the next batch given how many questions already exist. */

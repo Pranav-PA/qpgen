@@ -10,7 +10,6 @@ const bodySchema = z.object({
   ai_provider: z.enum(["google", "openai"]).optional(),
   images: z
     .object({
-      svg: z.boolean(),
       raster: z.enum(["high", "low", "off"]),
     })
     .optional(),

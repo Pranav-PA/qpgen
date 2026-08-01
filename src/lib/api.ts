@@ -69,19 +69,20 @@ export async function getAiProvider(): Promise<ProviderName> {
 }
 
 /**
- * Figure settings, admin-controlled at runtime.
+ * Question-diagram settings, admin-controlled at runtime.
  *
- * SVG costs nothing beyond the tokens it occupies, so it is separate from
- * raster: an admin watching the bill can switch raster off or down to the
- * cheap model without losing circuit and graph diagrams entirely.
+ * "high"/"low" select which Gemini image model renders diagrams (see
+ * IMAGE_MODEL_FOR_TIER in lib/ai/images.ts) — chosen by measured output
+ * quality, not price; "off" disables diagram questions entirely. There used
+ * to be a separate SVG toggle from when the model drew markup directly; that
+ * generation path is gone, so a single tri-state is the whole control now.
  */
 export type RasterMode = "high" | "low" | "off";
 export interface ImageConfig {
-  svg: boolean;
   raster: RasterMode;
 }
 
-export const DEFAULT_IMAGE_CONFIG: ImageConfig = { svg: true, raster: "high" };
+export const DEFAULT_IMAGE_CONFIG: ImageConfig = { raster: "high" };
 
 export async function getImageConfig(): Promise<ImageConfig> {
   try {
@@ -92,12 +93,11 @@ export async function getImageConfig(): Promise<ImageConfig> {
       .eq("key", "images")
       .maybeSingle();
     const v = data?.value as Partial<ImageConfig> | null;
-    if (!v) return DEFAULT_IMAGE_CONFIG;
+    const raster = v?.raster;
     return {
-      svg: typeof v.svg === "boolean" ? v.svg : DEFAULT_IMAGE_CONFIG.svg,
       raster:
-        v.raster === "high" || v.raster === "low" || v.raster === "off"
-          ? v.raster
+        raster === "high" || raster === "low" || raster === "off"
+          ? raster
           : DEFAULT_IMAGE_CONFIG.raster,
     };
   } catch {
@@ -108,7 +108,7 @@ export async function getImageConfig(): Promise<ImageConfig> {
 
 export async function logUsage(entry: {
   user_id: string;
-  action: "generate_batch" | "regenerate_question" | "verify_batch" | "analyze_reference" | "export";
+  action: "generate_batch" | "regenerate_question" | "verify_batch" | "analyze_reference" | "export" | "generate_image";
   usage?: Usage;
   success?: boolean;
   error_message?: string;

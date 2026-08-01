@@ -5,6 +5,7 @@ import {
   MAX_QUESTIONS_PER_PAPER,
   MIN_QUESTIONS_PER_PAPER,
   MAX_REFERENCE_PDF_PAGES,
+  MAX_FIGURE_QUESTIONS,
 } from "./constants";
 
 export const difficultySchema = z
@@ -88,6 +89,8 @@ export const paperSettingsSchema = z
     blueprint: blueprintSchema.optional(),
     style_notes: z.string().max(4000).optional(),
     extra_instructions: z.string().trim().max(1000).optional(),
+    /** Count of questions that must carry an AI-generated diagram. Opt-in; 0/undefined means none. */
+    figure_questions: z.number().int().min(0).max(MAX_FIGURE_QUESTIONS).optional(),
   })
   .refine((s) => s.mode !== "blueprint" || !!s.blueprint, {
     message: "Blueprint mode needs a blueprint.",
@@ -95,7 +98,10 @@ export const paperSettingsSchema = z
   .refine(
     (s) => s.mode === "blueprint" || s.question_count <= MAX_QUESTIONS_PER_PAPER,
     { message: `At most ${MAX_QUESTIONS_PER_PAPER} questions per paper.` }
-  );
+  )
+  .refine((s) => !s.figure_questions || s.figure_questions <= s.question_count, {
+    message: "Diagram questions can't outnumber the total questions.",
+  });
 
 export const institutionSchema = z.object({
   name: z.string().trim().min(2, "Institution name is required.").max(200),

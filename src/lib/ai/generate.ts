@@ -3,12 +3,10 @@ import type {
   Difficulty,
   PaperSettings,
   Question,
-  QuestionFigure,
   QuestionType,
   ReferencePage,
 } from "@/lib/types";
 import { repairMisescapedLatex } from "@/lib/text-repair";
-import { sanitizeSvg } from "@/lib/svg-sanitize";
 import { runAi, type ProviderName, type Usage } from "./providers";
 import {
   BLUEPRINT_EXTRACTION_PROMPT,
@@ -27,6 +25,8 @@ export interface BatchSlot {
   section_id?: string;
   section_name?: string;
   marks?: number;
+  /** Set by fullPlan() from settings.figure_questions — this slot's question must carry a diagram. */
+  wants_figure?: boolean;
 }
 
 interface RawQuestion {
@@ -37,8 +37,12 @@ interface RawQuestion {
   options: string[] | null;
   correct_answer: string;
   solution: string;
-  /** Sanitised in normalizeRaw; null once the allowlist has rejected it. */
-  figure?: QuestionFigure | null;
+  /**
+   * Plain-text description of the diagram to render — not markup. A separate
+   * image-generation pass (lib/ai/images.ts) draws from this text; see
+   * FIGURE_INSTRUCTIONS below for why the split exists.
+   */
+  figure_spec?: string | null;
 }
 
 export interface Verdict {
@@ -70,7 +74,7 @@ const questionsSchema = {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["type", "difficulty", "chapter", "question_text", "options", "correct_answer", "solution", "figure"],
+          required: ["type", "difficulty", "chapter", "question_text", "options", "correct_answer", "solution", "figure_spec"],
           properties: {
             type: {
               type: "string",
@@ -89,20 +93,7 @@ const questionsSchema = {
             options: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] },
             correct_answer: { type: "string" },
             solution: { type: "string" },
-            figure: {
-              anyOf: [
-                {
-                  type: "object",
-                  additionalProperties: false,
-                  required: ["svg", "caption"],
-                  properties: {
-                    svg: { type: "string" },
-                    caption: { type: "string" },
-                  },
-                },
-                { type: "null" },
-              ],
-            },
+            figure_spec: { anyOf: [{ type: "string" }, { type: "null" }] },
           },
         },
       },
@@ -161,31 +152,23 @@ function teacherInstructionBlock(instructions: string): string {
 }
 
 /**
- * Asked for only when figures are enabled, so a paper that does not want
- * diagrams never spends tokens describing how to draw them.
+ * Asked for only when the numbered composition marks specific slots as
+ * needing one — see the "needs a diagram" line added per-slot below.
+ *
+ * figure_spec is deliberately plain text, not markup: a second pass (a Gemini
+ * image model, see lib/ai/images.ts) renders it separately, in its own call,
+ * because responseSchema (strict JSON, used here) and image output are
+ * mutually exclusive within a single Gemini request.
  */
 const FIGURE_INSTRUCTIONS = [
-  "\nDiagrams: a question that cannot be answered without seeing something —",
-  "a circuit, a ray diagram, a labelled graph, a force diagram, an apparatus",
-  "setup — may carry a figure. Set \"figure\" to null for every other question,",
-  "which will be most of them. Never draw decoration.",
-  "",
-  "When you do draw, put plain SVG markup in figure.svg:",
-  "- Open with <svg viewBox=\"0 0 W H\"> and size it for a printed page (roughly",
-  "  300-500 units wide). Do not set width or height in pixels.",
-  "- Use only: path, line, polyline, polygon, rect, circle, ellipse, text,",
-  "  tspan, g, defs, marker.",
-  "- Give each branch of a circuit its own <path>. One path that doubles back",
-  "  on itself to reach a parallel branch draws an ambiguous network that",
-  "  cannot be read reliably.",
-  "- Draw arrowheads as a <polygon> at the tip of the line. A <marker> in",
-  "  <defs> renders nothing unless referenced, and is easy to leave dangling.",
-  "- Label parts with <text>. The figure prints in black and white, so rely on",
-  "  shape and labels rather than colour, and keep stroke widths >= 1.5.",
-  "- No <image>, <use>, <script>, <style>, <foreignObject>, no href of any kind,",
-  "  and no external references. Anything containing them is discarded whole.",
-  "- Do not put LaTeX in the SVG; it will not render. Write plain characters.",
-  "Give figure.caption a short description of what is drawn, for accessibility.",
+  "\nSome questions are marked below as needing a diagram — a circuit, a ray",
+  "diagram, an apparatus setup, a labelled biological or geometric figure.",
+  "For exactly those questions, write a complete plain-text description in",
+  "figure_spec: every component, every value, every label, and how they are",
+  "spatially arranged or connected. Someone who cannot see the question must",
+  "be able to draw it correctly from figure_spec alone — do not write \"a",
+  "diagram of X\", describe X. figure_spec is prose, never markup or code.",
+  "Set figure_spec to null on every other question.",
 ].join("\n");
 
 export async function generateQuestions(opts: {
@@ -200,12 +183,14 @@ export async function generateQuestions(opts: {
   if (isMockAi()) return mockGenerate(opts.settings, opts.slots);
 
   const { settings, slots, avoid, styleNotes } = opts;
+  const anyFigureSlot = opts.figures && slots.some((s) => s.wants_figure);
   const composition = slots
     .map((s, i) => {
       const bits = [`${i + 1}. ${s.difficulty} ${s.type}`];
       if (s.marks !== undefined) bits.push(`worth ${s.marks} mark(s)`);
       if (s.chapter) bits.push(`from the chapter "${s.chapter}"`);
       if (s.section_name) bits.push(`for ${s.section_name}`);
+      if (opts.figures && s.wants_figure) bits.push("needs a diagram — write figure_spec");
       return bits.join(", ");
     })
     .join("\n");
@@ -221,9 +206,9 @@ export async function generateQuestions(opts: {
     userParts.push(`\nStyle profile from the teacher's reference paper — imitate this style and difficulty, but never copy questions:\n${styleNotes}`);
   }
   userParts.push(
-    opts.figures
+    anyFigureSlot
       ? FIGURE_INSTRUCTIONS
-      : '\nDo not produce diagrams. Set "figure" to null on every question, and do not write questions that depend on seeing one.'
+      : '\nDo not produce diagrams. Set "figure_spec" to null on every question, and do not write questions that depend on seeing one.'
   );
   if (settings.extra_instructions) {
     userParts.push(teacherInstructionBlock(settings.extra_instructions));
@@ -270,23 +255,12 @@ function stripOptionLabels(options: string[] | null): string[] | null {
   return stripped.some((s) => s.length === 0) ? options : stripped;
 }
 
-/**
- * Sanitising here rather than at render time means the cleaned markup is what
- * gets stored, so every later consumer — review screen, print view, PDF —
- * inherits the guarantee without repeating the check.
- */
-function normalizeFigure(figure: QuestionFigure | null | undefined): QuestionFigure | null {
-  const svg = sanitizeSvg(figure?.svg);
-  if (!svg) return null;
-  const caption = figure?.caption?.trim();
-  return { svg, caption: caption ? caption.slice(0, 200) : undefined };
-}
-
 function normalizeRaw(raw: RawQuestion): RawQuestion {
+  const spec = raw.figure_spec?.trim();
   return {
     ...raw,
     options: stripOptionLabels(raw.options),
-    figure: normalizeFigure(raw.figure),
+    figure_spec: spec ? spec.slice(0, 2000) : null,
   };
 }
 
