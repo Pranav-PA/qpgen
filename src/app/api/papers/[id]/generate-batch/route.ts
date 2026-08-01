@@ -74,7 +74,11 @@ export async function POST(
 
     const verification = await verifyQuestions({
       settings: paper.settings,
-      questions: shuffled.map((q) => ({ ...q, options: q.options ?? undefined })),
+      questions: shuffled.map((q) => ({
+        ...q,
+        options: q.options ?? undefined,
+        has_figure: !!q.figure_spec,
+      })),
       provider,
     });
     await logUsage({ user_id: user.id, action: "verify_batch", usage: verification.usage });

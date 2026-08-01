@@ -14,8 +14,8 @@ const LATEX_RULES = `LaTeX rules:
 - Prefer the degree symbol ° directly (e.g. $45°$) rather than a superscript-circ construction.`;
 
 const SELF_CONTAINED_RULES = `Self-containment rules (critical):
-- Questions must be fully answerable from their text alone.
-- NEVER reference a figure, diagram, graph, circuit, or table ("as shown in the figure") — you cannot draw them. If a concept normally needs a diagram, describe the setup precisely in words instead, or choose a different question.`;
+- Questions must be fully answerable from their text alone, UNLESS the composition below marks that specific question as carrying a diagram (it will say "needs a diagram — write figure_spec"). Only for those marked questions may you write "as shown", "in the circuit shown", etc. — a real image matching your figure_spec is generated and printed alongside it.
+- Every other question — the ones NOT marked — must never reference a figure, diagram, graph, circuit, or table. If a concept normally needs a diagram and the question was not marked for one, describe the setup precisely in words instead, or choose a different question.`;
 
 export function generationSystemPrompt(settings: PaperSettings): string {
   return `You are an expert ${settings.subject} question setter for ${examLabel(settings)} examinations, writing questions for a real exam paper that a teacher will review and distribute.
@@ -59,7 +59,7 @@ export function verifierSystemPrompt(settings: PaperSettings): string {
 2. Then compare: does your answer match the stated correct_answer?
 3. Check chapter scope: does the question belong strictly to the allowed chapter(s) at ${examLabel(settings)} level?
 4. Check exactly-one-correct: for MCQs, verify no other option is also defensible and the four options are distinct. For descriptive questions (one_word / short_answer / long_answer) there are no options — instead confirm the model answer is factually right, actually answers what was asked, and that the work demanded matches the marks stated.
-5. Check self-containment: the question must not reference any figure/diagram/table, and must contain every value needed to solve it.
+5. Check self-containment: a question is marked "has_figure: true" when a real diagram is generated and printed alongside it — that one may reference "the circuit/diagram/graph shown". Every question with "has_figure: false" must contain every value needed to solve it and must not reference any figure, diagram, graph, circuit, or table.
 6. Check the solution is internally consistent with stated_correct_answer_text: the worked solution must arrive at that same answer. Note that options get re-ordered after generation, so a solution naming an option letter is unreliable by construction — judge consistency by the answer's content/value, and fail the question if the solution's conclusion contradicts it.
 
 Be strict: if you are not confident the question is correct, in scope, and unambiguous, fail it. A wrong question reaching students is far worse than a false alarm — the teacher sees your reason and decides.

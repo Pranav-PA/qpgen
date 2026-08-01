@@ -298,7 +298,10 @@ function parseJsonRaw<T>(text: string): T | null {
 
 export async function verifyQuestions(opts: {
   settings: PaperSettings;
-  questions: Pick<Question, "type" | "difficulty" | "chapter" | "question_text" | "options" | "correct_answer" | "solution">[];
+  questions: (Pick<Question, "type" | "difficulty" | "chapter" | "question_text" | "options" | "correct_answer" | "solution"> & {
+    /** True when a real diagram is being generated for this question — lets the verifier's self-containment check exempt it correctly. */
+    has_figure?: boolean;
+  })[];
   provider: Provider;
 }): Promise<{ verdicts: Verdict[]; usage: Usage }> {
   if (isMockAi()) {
@@ -323,6 +326,7 @@ export async function verifyQuestions(opts: {
       index,
       type: q.type,
       difficulty: q.difficulty,
+      has_figure: !!q.has_figure,
       claimed_chapter: q.chapter,
       question_text: q.question_text,
       // Options are labelled so the verifier cannot mis-map the answer letter.
