@@ -241,6 +241,8 @@ export interface PaperSettings {
   /** Absent on papers created before blueprint mode existed — treat as "simple". */
   mode?: "simple" | "blueprint";
   blueprint?: Blueprint;
+  /** Print/PDF layout for the question list. Absent means 1 (pre-existing papers). */
+  layout_columns?: 1 | 2;
 }
 
 export function isBlueprint(s: PaperSettings): boolean {
