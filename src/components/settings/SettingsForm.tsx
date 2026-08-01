@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Profile } from "@/lib/types";
+import Icon from "@/components/Icon";
 
 export default function SettingsForm({ profile }: { profile: Profile }) {
   const [displayName, setDisplayName] = useState(profile.display_name ?? "");
@@ -64,7 +65,12 @@ export default function SettingsForm({ profile }: { profile: Profile }) {
         <button type="submit" className="btn-primary" disabled={state === "busy"}>
           {state === "busy" ? "Saving…" : "Save settings"}
         </button>
-        {state === "done" && <span className="text-sm text-ok">Saved ✓</span>}
+        {state === "done" && (
+          <span className="text-sm text-ok inline-flex items-center gap-1">
+            <Icon name="check" className="size-4" />
+            Saved
+          </span>
+        )}
         {state === "error" && <span className="text-sm text-danger">Save failed — try again.</span>}
       </div>
 

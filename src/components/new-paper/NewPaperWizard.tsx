@@ -1,9 +1,17 @@
 "use client";
 
-import { useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { renderPdfToImages } from "@/lib/pdf";
+import Icon from "@/components/Icon";
 import NumberInput from "@/components/NumberInput";
 import {
   DEFAULT_INSTRUCTIONS,
@@ -89,6 +97,24 @@ export default function NewPaperWizard({
 
   const blueprintMode = settings.mode === "blueprint";
   const bp = settings.blueprint ?? null;
+
+  const generationRunning = gen.phase !== "idle" && gen.phase !== "error";
+
+  /**
+   * Generation is driven from this tab: the loop that asks for the next batch
+   * lives here, so closing the tab abandons a half-generated paper and the
+   * quota it has already spent. The screen asks teachers to keep the tab open;
+   * this is the only thing that can actually hold them to it.
+   */
+  useEffect(() => {
+    if (!generationRunning) return;
+    function warn(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [generationRunning]);
 
   const autoMaxMarks =
     blueprintMode && bp
@@ -344,7 +370,15 @@ export default function NewPaperWizard({
         <p className="help mt-4">
           Each batch is generated, then independently re-solved by a second AI
           pass to check correctness and chapter scope. This takes a minute or
-          two — please keep this tab open.
+          two.
+        </p>
+        <p className="mt-3 text-xs text-warn bg-warn-soft border border-warn/30 rounded-lg px-3 py-2 inline-flex items-start gap-2 text-left">
+          <Icon name="alert" className="size-3.5 mt-0.5" />
+          <span>
+            Keep this tab open. Generation runs from here — closing it stops the
+            paper part-way, and the questions already generated still count
+            towards your daily limit.
+          </span>
         </p>
       </div>
     );
@@ -379,31 +413,13 @@ export default function NewPaperWizard({
         <h1 className="text-2xl font-bold">New question paper</h1>
         {(lastSettings || lastInstitution) && step === 1 && (
           <button className="btn-secondary text-xs" onClick={applyLastPaper}>
-            ↺ Reuse last paper&apos;s setup
+            <Icon name="rotateBack" className="size-3.5" />
+            Reuse last paper&apos;s setup
           </button>
         )}
       </div>
 
-      <ol className="flex items-center gap-2 text-xs mb-6" aria-label="Progress">
-        {["Exam & questions", "Institution & letterhead", "Reference & generate"].map(
-          (label, i) => (
-            <li key={label} className="flex items-center gap-2">
-              <span
-                className={`badge ${
-                  step === i + 1
-                    ? "bg-accent text-white"
-                    : step > i + 1
-                      ? "bg-ok-soft text-ok"
-                      : "bg-background text-muted border border-line"
-                }`}
-              >
-                {step > i + 1 ? "✓" : i + 1} {label}
-              </span>
-              {i < 2 && <span className="text-line">—</span>}
-            </li>
-          )
-        )}
-      </ol>
+      <Stepper step={step} onGoBack={(target) => { setStepError(""); setStep(target); }} />
 
       <div className="card p-6 sm:p-8">
         {step === 1 && (
@@ -456,23 +472,113 @@ export default function NewPaperWizard({
         <div className="flex justify-between mt-8">
           {step > 1 ? (
             <button className="btn-secondary" onClick={() => setStep(step - 1)}>
-              ← Back
+              <Icon name="arrowLeft" className="size-4" />
+              Back
             </button>
           ) : (
             <span />
           )}
           {step < 3 ? (
             <button className="btn-primary" onClick={goNext}>
-              Continue →
+              Continue
+              <Icon name="arrowRight" className="size-4" />
             </button>
           ) : (
             <button className="btn-primary" onClick={generate} disabled={refBusy}>
-              Generate paper ✨
+              <Icon name="sparkles" className="size-4" />
+              Generate paper
             </button>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+/* ================================================================== */
+/* Progress indicator                                                  */
+
+const STEP_LABELS = [
+  "Exam & questions",
+  "Institution & letterhead",
+  "Reference & generate",
+];
+
+/**
+ * Three labels this long never fitted on a phone as side-by-side badges — they
+ * wrapped into a block of chips that read as options rather than progress. On
+ * small screens this collapses to the usual "Step 2 of 3" line plus a bar, and
+ * only spreads out once there is room for it.
+ *
+ * Completed steps are buttons: going back to fix the exam type was otherwise a
+ * matter of pressing Back the right number of times.
+ */
+function Stepper({
+  step,
+  onGoBack,
+}: {
+  step: number;
+  onGoBack: (target: number) => void;
+}) {
+  return (
+    <nav aria-label="Progress" className="mb-6">
+      <div className="sm:hidden">
+        <p className="text-xs text-muted mb-1.5">
+          Step {step} of {STEP_LABELS.length} —{" "}
+          <span className="text-foreground font-medium">{STEP_LABELS[step - 1]}</span>
+        </p>
+        <div className="h-1.5 rounded-full bg-background border border-line overflow-hidden">
+          <div
+            className="h-full bg-accent transition-all duration-300"
+            style={{ width: `${(step / STEP_LABELS.length) * 100}%` }}
+          />
+        </div>
+      </div>
+
+      <ol className="hidden sm:flex items-center gap-2 text-xs">
+        {STEP_LABELS.map((label, i) => {
+          const position = i + 1;
+          const done = step > position;
+          const current = step === position;
+          const content = (
+            <>
+              {done ? <Icon name="check" className="size-3" /> : position}
+              {label}
+            </>
+          );
+          return (
+            <li key={label} className="flex items-center gap-2">
+              {done ? (
+                <button
+                  type="button"
+                  onClick={() => onGoBack(position)}
+                  className="badge bg-ok-soft text-ok hover:bg-ok hover:text-background transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                >
+                  {content}
+                  <span className="sr-only">— go back to this step</span>
+                </button>
+              ) : (
+                <span
+                  aria-current={current ? "step" : undefined}
+                  className={`badge ${
+                    current
+                      ? "bg-accent text-accent-contrast"
+                      : "bg-background text-muted border border-line"
+                  }`}
+                >
+                  {content}
+                </span>
+              )}
+              {i < STEP_LABELS.length - 1 && (
+                <span className="text-line" aria-hidden>
+                  —
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }
 
@@ -568,8 +674,11 @@ function StepExam({
         <fieldset className="border border-line rounded-lg p-3">
           <legend className="text-xs text-muted px-1">Paper structure</legend>
           <div className="flex flex-wrap gap-2">
+            {/* aria-pressed: the only other cue that one of these is selected
+                is its fill colour, which a screen reader cannot see. */}
             <button
               type="button"
+              aria-pressed={!blueprintMode}
               className={blueprintMode ? "btn-secondary text-xs" : "btn-primary text-xs"}
               onClick={() => setMode("simple")}
             >
@@ -577,6 +686,7 @@ function StepExam({
             </button>
             <button
               type="button"
+              aria-pressed={blueprintMode}
               className={blueprintMode ? "btn-primary text-xs" : "btn-secondary text-xs"}
               onClick={() => setMode("blueprint")}
             >
@@ -1076,9 +1186,10 @@ function StepReference({
           per page — good for short MCQs. One column reads better for long or
           diagram-heavy questions.
         </p>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Page layout">
           <button
             type="button"
+            aria-pressed={(settings.layout_columns ?? 1) === 1}
             className={(settings.layout_columns ?? 1) === 1 ? "btn-primary text-xs" : "btn-secondary text-xs"}
             onClick={() => setSettings((s) => ({ ...s, layout_columns: 1 }))}
           >
@@ -1086,6 +1197,7 @@ function StepReference({
           </button>
           <button
             type="button"
+            aria-pressed={settings.layout_columns === 2}
             className={settings.layout_columns === 2 ? "btn-primary text-xs" : "btn-secondary text-xs"}
             onClick={() => setSettings((s) => ({ ...s, layout_columns: 2 }))}
           >

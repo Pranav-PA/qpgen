@@ -1,34 +1,89 @@
 @import "tailwindcss";
 @import "katex/dist/katex.min.css";
 
+/*
+ * Theme tokens.
+ *
+ * The inline script in app/layout.tsx always resolves the theme to a literal
+ * "light" or "dark" on <html data-theme> before first paint — including when
+ * the user has expressed no preference and we are following the OS. That means
+ * the dark palette only ever needs one selector here, instead of being
+ * duplicated across a [data-theme] rule and a prefers-color-scheme block.
+ */
 :root {
+  color-scheme: light;
   --background: #f6f7f9;
   --surface: #ffffff;
+  --surface-raised: #ffffff;
   --foreground: #0f172a;
   --muted: #64748b;
   --border: #e2e8f0;
+  /*
+   * Form-control boundaries. WCAG 1.4.11 wants 3:1 against the adjacent
+   * surface for anything you are meant to interact with, and an empty text box
+   * has nothing *but* its border to perceive. Card and divider borders stay on
+   * the softer --border, where the requirement does not apply and a 3:1 line
+   * would just look loud. Measured 3.29:1 on white, 3.07:1 on --background.
+   */
+  --border-strong: #7f8fa6;
   --accent: #4338ca;
   --accent-hover: #3730a3;
   --accent-soft: #eef2ff;
+  /* Text/icon colour that sits *on top of* a filled --accent surface. */
+  --accent-contrast: #ffffff;
   --danger: #b91c1c;
   --danger-soft: #fef2f2;
+  --danger-contrast: #ffffff;
   --warn: #b45309;
   --warn-soft: #fffbeb;
   --ok: #15803d;
   --ok-soft: #f0fdf4;
 }
 
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #0b1220;
+  --surface: #151d2e;
+  --surface-raised: #1c2537;
+  --foreground: #e8edf6;
+  --muted: #9aa8bd;
+  --border: #2c384f;
+  /* 3.36:1 on --surface, 3.74:1 on --background. */
+  --border-strong: #5f708e;
+  --accent: #8b95f9;
+  --accent-hover: #a9b1fc;
+  --accent-soft: #1e2145;
+  --accent-contrast: #10122b;
+  --danger: #f98a8a;
+  --danger-soft: #3a1414;
+  --danger-contrast: #2a0808;
+  --warn: #f3bd58;
+  --warn-soft: #3a2a0c;
+  --ok: #62d492;
+  --ok-soft: #0d2f1d;
+}
+
+@theme {
+  /* Small phones (≤ 26rem) need one more step below Tailwind's `sm`; several
+     labels in the review toolbar only fit in their short form down there. */
+  --breakpoint-xs: 26rem;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
   --color-accent-soft: var(--accent-soft);
+  --color-accent-contrast: var(--accent-contrast);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
+  --color-danger-contrast: var(--danger-contrast);
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
   --color-ok: var(--ok);
@@ -53,17 +108,24 @@ body {
   .btn-danger {
     @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent;
   }
+  /* Press feedback. Skipped while disabled so inert controls stay inert. */
+  .btn:not(:disabled):active,
+  .btn-primary:not(:disabled):active,
+  .btn-secondary:not(:disabled):active,
+  .btn-danger:not(:disabled):active {
+    @apply translate-y-px;
+  }
   .btn-primary {
-    @apply bg-accent text-white hover:bg-accent-hover;
+    @apply bg-accent text-accent-contrast hover:bg-accent-hover;
   }
   .btn-secondary {
     @apply bg-surface border border-line text-foreground hover:bg-background;
   }
   .btn-danger {
-    @apply bg-danger-soft text-danger border border-danger/20 hover:bg-danger hover:text-white;
+    @apply bg-danger-soft text-danger border border-danger/20 hover:bg-danger hover:text-danger-contrast;
   }
   .input {
-    @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-foreground placeholder:text-muted/60 focus:outline-2 focus:outline-offset-0 focus:outline-accent/60;
+    @apply w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-foreground placeholder:text-muted/60 focus:outline-2 focus:outline-offset-0 focus:outline-accent/60;
   }
   .label {
     @apply block text-sm font-medium text-foreground mb-1;
@@ -78,6 +140,31 @@ body {
   .skeleton {
     @apply animate-pulse rounded bg-line;
   }
+  /*
+   * Text links in prose and nav. Browsers do give these a focus ring, but in
+   * the UA's colour rather than ours — pin it so keyboard focus is consistent.
+   */
+  .link {
+    @apply text-accent font-medium hover:underline rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent;
+  }
+  /* Jump link for keyboard and screen-reader users; off-screen until focused. */
+  .skip-link {
+    @apply sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-lg focus:bg-accent focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-accent-contrast focus:shadow-lg;
+  }
+}
+
+/*
+ * Touch pointers get a 44px minimum hit area on every button, whatever
+ * text-size utility is on it. Doing this once here keeps the dense desktop
+ * layout intact while still clearing the mobile tap-target floor.
+ */
+@media (pointer: coarse) {
+  .btn,
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger {
+    min-height: 2.75rem;
+  }
 }
 
 /* KaTeX sizing inside question text */
@@ -85,8 +172,59 @@ body {
   font-size: 1.05em;
 }
 
+/*
+ * Generated diagrams are drawn as dark ink on an assumed white page. Pinning a
+ * light surface behind them keeps circuits and ray diagrams legible in dark
+ * mode instead of leaving black strokes on a near-black card.
+ */
+.qp-figure {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem;
+  display: block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ------- print styles (print routes add .print-page to <main>) ------- */
 @media print {
+  /*
+   * Paper is always white, so pin the light palette whatever the on-screen
+   * theme is — otherwise printing from the browser in dark mode puts pale
+   * text on a white page.
+   */
+  :root,
+  :root[data-theme="dark"] {
+    color-scheme: light;
+    --background: #ffffff;
+    --surface: #ffffff;
+    --surface-raised: #ffffff;
+    --foreground: #0f172a;
+    --muted: #475569;
+    --border: #cbd5e1;
+    --border-strong: #94a3b8;
+    --accent: #3730a3;
+    --accent-hover: #3730a3;
+    --accent-soft: #eef2ff;
+    --accent-contrast: #ffffff;
+    --danger: #b91c1c;
+    --danger-soft: #fef2f2;
+    --danger-contrast: #ffffff;
+    --warn: #92400e;
+    --warn-soft: #fffbeb;
+    --ok: #15803d;
+    --ok-soft: #f0fdf4;
+  }
   body {
     background: #ffffff;
   }

@@ -1,19 +1,23 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Icon from "@/components/Icon";
 import MathText from "@/components/MathText";
 import QuestionFigure from "@/components/QuestionFigure";
 import SupportPrompt from "@/components/support/SupportPrompt";
-import { groupBySection } from "@/lib/sections";
+import { groupBySection, type SectionGroup } from "@/lib/sections";
 import {
   QUESTION_TYPE_LABELS,
   hasOptions,
+  type BlueprintSection,
   type Paper,
   type Question,
 } from "@/lib/types";
 
 const LETTERS = ["A", "B", "C", "D"];
+
+const questionDomId = (id: string) => `q-${id}`;
 
 export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
   const router = useRouter();
@@ -26,13 +30,34 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
   const [continuing, setContinuing] = useState(false);
   const [busyExport, setBusyExport] = useState<string | null>(null);
   const [exported, setExported] = useState(false);
+  const [revealAll, setRevealAll] = useState(false);
+  /** Last deleted question, kept so the removal can be taken back. */
+  const [undo, setUndo] = useState<{ question: Question; at: number } | null>(null);
+  const flagCursor = useRef(0);
 
-  const flaggedCount = questions.filter((q) => q.needs_review).length;
+  const flagged = useMemo(() => questions.filter((q) => q.needs_review), [questions]);
   const remaining = paper.settings.question_count - questions.length;
   const groups = useMemo(
     () => groupBySection({ ...paper, questions }),
     [paper, questions]
   );
+
+  /**
+   * Edits live in component state until "Save changes" is pressed, so closing
+   * the tab used to throw away an evening of corrections without a word. The
+   * browser's own confirmation is the only thing that can interrupt an unload,
+   * so hook it whenever there is something to lose.
+   */
+  useEffect(() => {
+    if (!dirty) return;
+    function warn(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      // Older browsers only honour the deprecated returnValue.
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
 
   function mutate(next: Question[]) {
     setQuestions(next);
@@ -77,6 +102,47 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
     );
     setQuestions(next);
     void save({ questions: next, quiet: true });
+  }
+
+  /**
+   * Deleting is not gated behind a confirmation because it is not yet
+   * destructive — the question only leaves the database on the next save, and
+   * pruning a paper down to size means doing this many times in a row. An undo
+   * that stays put until it is used beats a dialog per question.
+   */
+  function removeQuestion(id: string) {
+    const at = questions.findIndex((q) => q.id === id);
+    if (at === -1) return;
+    setUndo({ question: questions[at], at });
+    mutate(questions.filter((q) => q.id !== id));
+  }
+
+  function undoRemove() {
+    if (!undo) return;
+    const next = [...questions];
+    next.splice(Math.min(undo.at, next.length), 0, undo.question);
+    mutate(next);
+    setUndo(null);
+  }
+
+  /**
+   * Reordering is deliberately confined to a single part. A question carries
+   * its part's marks and question type, so moving one across a boundary would
+   * silently print a 5-mark long answer inside the 1-mark MCQ section.
+   */
+  function moveWithinGroup(groupIndex: number, offset: number, delta: number) {
+    const group = groups[groupIndex];
+    const target = offset + delta;
+    if (!group || target < 0 || target >= group.questions.length) return;
+
+    const reordered = [...group.questions];
+    [reordered[offset], reordered[target]] = [reordered[target], reordered[offset]];
+
+    // Rebuilding from the groups also normalises storage order to print order,
+    // which is what the export has always used anyway.
+    mutate(
+      groups.flatMap((g, i) => (i === groupIndex ? reordered : g.questions))
+    );
   }
 
   const pdfUrl = (doc: "paper" | "key") =>
@@ -127,64 +193,151 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
     }
   }
 
-  function addCustomQuestion() {
+  /** Walks the flagged questions in order, wrapping at the end. */
+  function jumpToFlagged() {
+    if (flagged.length === 0) return;
+    const index = flagCursor.current % flagged.length;
+    flagCursor.current = index + 1;
+    const node = document.getElementById(questionDomId(flagged[index].id));
+    node?.scrollIntoView({ behavior: "smooth", block: "center" });
+    node?.focus({ preventScroll: true });
+  }
+
+  function addCustomQuestion(section: BlueprintSection | null) {
+    const id = crypto.randomUUID();
     mutate([
       ...questions,
       {
-        id: crypto.randomUUID(),
-        type: "mcq",
+        id,
+        // A blueprint part dictates the type and mark value of everything in
+        // it, so a hand-written question joins on the part's terms.
+        type: section?.question_type ?? "mcq",
         difficulty: "medium",
         chapter: paper.settings.chapters[0] ?? "",
         question_text: "",
         options: ["", "", "", ""],
         correct_answer: "A",
         solution: "",
-        marks: paper.settings.marks_per_question,
-        negative_marks: paper.settings.negative_marks,
+        marks: section?.marks_per_question ?? paper.settings.marks_per_question,
+        negative_marks: section ? 0 : paper.settings.negative_marks,
         needs_review: false,
         teacher_authored: true,
+        ...(section ? { section_id: section.id } : {}),
       },
     ]);
+    // Land on the empty card instead of leaving it below the fold.
+    requestAnimationFrame(() => {
+      const node = document.getElementById(questionDomId(id));
+      node?.scrollIntoView({ behavior: "smooth", block: "center" });
+      node?.focus({ preventScroll: true });
+    });
   }
 
   return (
     <div className="max-w-3xl mx-auto">
-      {/* The non-negotiable review notice — always visible. */}
+      {/*
+        The review notice, in full, at the top of the paper where it is read
+        once and properly.
+      */}
+      <div className="rounded-xl border border-warn/30 bg-warn-soft text-warn px-4 py-3 text-sm font-medium flex items-start gap-2">
+        <Icon name="alert" className="size-4 mt-0.5" />
+        <span>
+          Please review all questions <em>and</em> answers before printing or
+          distributing to students. AI-generated content can contain mistakes —
+          you are the final check.
+          {flagged.length > 0 && (
+            <>
+              {" "}
+              <strong>
+                {flagged.length} question{flagged.length > 1 ? "s are" : " is"} flagged
+                by the automatic verifier
+              </strong>{" "}
+              — worth a second look. Flags never block exporting; you can
+              download whenever you like.
+            </>
+          )}
+        </span>
+      </div>
+
+      {/*
+        …and a short version of the same warning that never leaves the screen,
+        carrying the controls with it.
+        The full notice used to be the sticky element. On a phone it held a
+        third of the viewport open on every scroll, which is how a warning
+        becomes wallpaper — and saving still meant scrolling back to the top of
+        a thirty-question paper. This keeps the reminder permanently in view at
+        a size that stays readable rather than ignorable.
+      */}
       <div className="sticky top-14 z-10 -mx-2 px-2 pt-2 pb-2 bg-background">
-        <div className="rounded-xl border border-warn/30 bg-warn-soft text-warn px-4 py-3 text-sm font-medium flex items-start gap-2">
-          <span aria-hidden>⚠️</span>
-          <span>
-            Please review all questions <em>and</em> answers before printing or
-            distributing to students. AI-generated content can contain mistakes —
-            you are the final check.
-            {flaggedCount > 0 && (
+        <div className="rounded-xl border border-warn/30 bg-surface px-3 py-2 flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-warn">
+            <Icon name="alert" className="size-3.5" />
+            <span className="hidden xs:inline">Review before distributing</span>
+            <span className="xs:hidden">Review first</span>
+          </span>
+
+          {flagged.length > 0 && (
+            <button
+              className="btn-secondary text-xs"
+              onClick={jumpToFlagged}
+              title="Scroll to the next question the verifier flagged"
+            >
+              <Icon name="flag" className="size-3.5" />
+              {flagged.length} flagged
+            </button>
+          )}
+          <button
+            className="btn-secondary text-xs"
+            onClick={() => setRevealAll((on) => !on)}
+            aria-pressed={revealAll}
+          >
+            <Icon name="eye" className="size-3.5" />
+            {revealAll ? "Hide answers" : "Show answers"}
+          </button>
+
+          <span className="flex-1" />
+
+          {/*
+            sr-only rather than hidden on small screens: `hidden` drops the
+            node from the accessibility tree, which would silence the save
+            status for exactly the users who most need it announced.
+          */}
+          <span
+            className="text-xs text-muted sr-only sm:not-sr-only"
+            aria-live="polite"
+          >
+            {saving ? "Saving…" : dirty ? "Unsaved changes" : "All changes saved"}
+          </span>
+          <button
+            className="btn-primary text-xs"
+            onClick={() => void save()}
+            disabled={saving || !dirty}
+          >
+            {dirty ? (
+              "Save changes"
+            ) : (
               <>
-                {" "}
-                <strong>
-                  {flaggedCount} question{flaggedCount > 1 ? "s are" : " is"} flagged
-                  by the automatic verifier
-                </strong>{" "}
-                — worth a second look. Flags never block exporting; you can
-                download whenever you like.
+                <Icon name="check" className="size-3.5" />
+                Saved
               </>
             )}
-          </span>
+          </button>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 mt-4 mb-2">
+      <div className="mt-4 mb-2">
+        <label htmlFor="paper-title" className="sr-only">
+          Paper title
+        </label>
         <input
-          aria-label="Paper title"
-          className="input text-lg font-semibold flex-1 min-w-60"
+          id="paper-title"
+          className="input text-lg font-semibold"
           value={title}
           onChange={(e) => {
             setTitle(e.target.value);
             setDirty(true);
           }}
         />
-        <button className="btn-primary" onClick={() => void save()} disabled={saving || !dirty}>
-          {saving ? "Saving…" : dirty ? "Save changes" : "Saved ✓"}
-        </button>
       </div>
       <p className="text-sm text-muted mb-4">
         {paper.exam_type} · {paper.subject} · {paper.chapters.join(", ")} ·{" "}
@@ -195,8 +348,30 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
         <p role="status" className="text-sm mb-4 text-muted">{notice}</p>
       )}
 
+      {undo && (
+        <div
+          role="status"
+          className="card p-3 mb-4 flex flex-wrap items-center gap-3 border-accent/30"
+        >
+          <p className="text-sm flex-1 min-w-52">
+            Question removed. It leaves the paper for good when you save.
+          </p>
+          <button className="btn-secondary text-xs" onClick={undoRemove}>
+            <Icon name="rotateBack" className="size-3.5" />
+            Undo
+          </button>
+          <button
+            className="btn-secondary text-xs"
+            onClick={() => setUndo(null)}
+            aria-label="Dismiss undo"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {remaining > 0 && (
-        <div className="card p-4 mb-4 flex items-center justify-between gap-4 border-accent/30">
+        <div className="card p-4 mb-4 flex flex-wrap items-center justify-between gap-4 border-accent/30">
           <p className="text-sm">
             This paper has {questions.length} of {paper.settings.question_count}{" "}
             planned questions — generation stopped early.
@@ -208,41 +383,27 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
       )}
 
       <div className="space-y-4">
-        {groups.map((g, gi) => (
-          <section key={g.heading ?? `g${gi}`} className="space-y-4">
-            {g.heading && (
-              <div className="rounded-lg bg-accent-soft border border-accent/20 px-4 py-2">
-                <h2 className="font-semibold text-accent text-sm">{g.heading}</h2>
-                {g.instruction && (
-                  <p className="text-xs text-accent/80 mt-0.5">{g.instruction}</p>
-                )}
-              </div>
-            )}
-            {g.questions.map((q, i) => (
-              <QuestionCard
-                key={q.id}
-                index={g.startIndex - 1 + i}
-                question={q}
-                paperId={paper.id}
-                onChange={(next) =>
-                  mutate(questions.map((x) => (x.id === q.id ? next : x)))
-                }
-                onResolveFlag={() => resolveFlag(q.id)}
-                onDelete={() => mutate(questions.filter((x) => x.id !== q.id))}
-                onReplaced={(next) => {
-                  setQuestions((prev) => prev.map((x) => (x.id === q.id ? next : x)));
-                  setDirty(false);
-                }}
-              />
-            ))}
-          </section>
+        {groups.map((group, groupIndex) => (
+          <SectionBlock
+            key={group.heading ?? `g${groupIndex}`}
+            group={group}
+            paperId={paper.id}
+            revealAll={revealAll}
+            onChangeQuestion={(next) =>
+              mutate(questions.map((x) => (x.id === next.id ? next : x)))
+            }
+            onResolveFlag={resolveFlag}
+            onDelete={removeQuestion}
+            onReplaced={(next, originalId) => {
+              setQuestions((prev) =>
+                prev.map((x) => (x.id === originalId ? next : x))
+              );
+              setDirty(false);
+            }}
+            onMove={(offset, delta) => moveWithinGroup(groupIndex, offset, delta)}
+            onAdd={() => addCustomQuestion(group.section)}
+          />
         ))}
-      </div>
-
-      <div className="flex justify-center mt-6">
-        <button className="btn-secondary" onClick={addCustomQuestion}>
-          + Add your own question
-        </button>
       </div>
 
       {/* Export */}
@@ -255,12 +416,13 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
         <div className="grid sm:grid-cols-2 gap-4">
           {(
             [
-              ["paper", "📄 Question paper", "(for students)"],
-              ["key", "🔑 Answer key", "(for you)"],
+              ["paper", "fileText", "Question paper", "(for students)"],
+              ["key", "key", "Answer key", "(for you)"],
             ] as const
-          ).map(([doc, heading, who]) => (
+          ).map(([doc, icon, heading, who]) => (
             <div key={doc} className="border border-line rounded-lg p-4">
-              <h3 className="text-sm font-semibold mb-2">
+              <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                <Icon name={icon} className="size-4 text-accent" />
                 {heading} <span className="text-muted font-normal">{who}</span>
               </h3>
               {/*
@@ -276,7 +438,8 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
                   disabled={busyExport !== null}
                   onClick={() => saveThenDownload(doc)}
                 >
-                  {busyExport === doc ? "Preparing…" : "⬇ Download PDF"}
+                  <Icon name="download" className="size-3.5" />
+                  {busyExport === doc ? "Preparing…" : "Download PDF"}
                 </button>
               ) : (
                 <a
@@ -287,7 +450,8 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
                     setExported(true);
                   }}
                 >
-                  ⬇ Download PDF
+                  <Icon name="download" className="size-3.5" />
+                  Download PDF
                 </a>
               )}
             </div>
@@ -306,10 +470,80 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
 
 /* ================================================================== */
 
+function SectionBlock({
+  group,
+  paperId,
+  revealAll,
+  onChangeQuestion,
+  onResolveFlag,
+  onDelete,
+  onReplaced,
+  onMove,
+  onAdd,
+}: {
+  group: SectionGroup;
+  paperId: string;
+  revealAll: boolean;
+  onChangeQuestion: (q: Question) => void;
+  onResolveFlag: (id: string) => void;
+  onDelete: (id: string) => void;
+  onReplaced: (q: Question, originalId: string) => void;
+  onMove: (offset: number, delta: number) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <section className="space-y-4">
+      {group.heading && (
+        <div className="rounded-lg bg-accent-soft border border-accent/20 px-4 py-2">
+          <h2 className="font-semibold text-accent text-sm">{group.heading}</h2>
+          {group.instruction && (
+            <p className="text-xs text-accent/80 mt-0.5">{group.instruction}</p>
+          )}
+        </div>
+      )}
+      {group.questions.map((q, offset) => (
+        <QuestionCard
+          key={q.id}
+          index={group.startIndex - 1 + offset}
+          question={q}
+          paperId={paperId}
+          revealAll={revealAll}
+          canMoveUp={offset > 0}
+          canMoveDown={offset < group.questions.length - 1}
+          onMove={(delta) => onMove(offset, delta)}
+          onChange={onChangeQuestion}
+          onResolveFlag={() => onResolveFlag(q.id)}
+          onDelete={() => onDelete(q.id)}
+          onReplaced={(next) => onReplaced(next, q.id)}
+        />
+      ))}
+      {/*
+        The add button belongs to the part, not the page: a hand-written
+        question has to inherit the part's marks and question type, and there
+        is no sensible answer to "which part?" from a button at the bottom.
+      */}
+      <div className="flex justify-center">
+        <button className="btn-secondary text-xs" onClick={onAdd}>
+          <Icon name="plus" className="size-3.5" />
+          {group.heading
+            ? `Add your own question to ${group.heading}`
+            : "Add your own question"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/* ================================================================== */
+
 function QuestionCard({
   index,
   question: q,
   paperId,
+  revealAll,
+  canMoveUp,
+  canMoveDown,
+  onMove,
   onChange,
   onResolveFlag,
   onDelete,
@@ -318,6 +552,10 @@ function QuestionCard({
   index: number;
   question: Question;
   paperId: string;
+  revealAll: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMove: (delta: number) => void;
   onChange: (q: Question) => void;
   onResolveFlag: () => void;
   onDelete: () => void;
@@ -332,6 +570,18 @@ function QuestionCard({
   const [error, setError] = useState("");
 
   const isMcqLike = hasOptions(q.type);
+
+  /*
+   * Follow the paper-wide "show all answers" switch, while still allowing this
+   * one card to be toggled on its own afterwards. Adjusted during render (the
+   * same pattern as NumberInput) so the card never paints in the old state
+   * first and corrects itself a frame later.
+   */
+  const [seenRevealAll, setSeenRevealAll] = useState(revealAll);
+  if (revealAll !== seenRevealAll) {
+    setSeenRevealAll(revealAll);
+    setShowSolution(revealAll);
+  }
 
   async function regenerate() {
     setRegenerating(true);
@@ -369,7 +619,11 @@ function QuestionCard({
 
   return (
     <article
-      className={`card p-5 ${q.needs_review ? "border-warn/50" : ""}`}
+      id={questionDomId(q.id)}
+      tabIndex={-1}
+      className={`card p-5 scroll-mt-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+        q.needs_review ? "border-warn/50" : ""
+      }`}
       aria-label={`Question ${index + 1}`}
     >
       <div className="flex items-center gap-2 flex-wrap mb-3">
@@ -388,12 +642,40 @@ function QuestionCard({
         )}
         {q.needs_review && (
           <span className="badge bg-warn-soft text-warn border border-warn/30">
-            ⚠ Needs review
+            <Icon name="alert" className="size-3" />
+            Needs review
           </span>
         )}
         <span className="flex-1" />
         <div className="flex gap-1.5">
-          <button className="btn-secondary text-xs px-2.5 py-1" onClick={() => setEditing(!editing)}>
+          {/*
+            Reordering is per-part. The buttons stay mounted but disabled at
+            the ends so the row of controls does not reflow as you move a
+            question up and down the paper.
+          */}
+          <button
+            className="btn-secondary text-xs px-2 py-1"
+            onClick={() => onMove(-1)}
+            disabled={!canMoveUp}
+            aria-label={`Move question ${index + 1} earlier`}
+            title="Move earlier"
+          >
+            <Icon name="chevronUp" className="size-3.5" />
+          </button>
+          <button
+            className="btn-secondary text-xs px-2 py-1"
+            onClick={() => onMove(1)}
+            disabled={!canMoveDown}
+            aria-label={`Move question ${index + 1} later`}
+            title="Move later"
+          >
+            <Icon name="chevronDown" className="size-3.5" />
+          </button>
+          <button
+            className="btn-secondary text-xs px-2.5 py-1"
+            onClick={() => setEditing(!editing)}
+          >
+            <Icon name={editing ? "eye" : "pencil"} className="size-3.5" />
             {editing ? "Preview" : "Edit"}
           </button>
           {!q.teacher_authored && (
@@ -403,10 +685,16 @@ function QuestionCard({
               disabled={regenerating}
               title="Replace with a freshly generated question of the same type and difficulty"
             >
-              {regenerating ? "Regenerating…" : "↻ Regenerate"}
+              <Icon name="refresh" className="size-3.5" />
+              {regenerating ? "Regenerating…" : "Regenerate"}
             </button>
           )}
-          <button className="btn-danger text-xs px-2.5 py-1" onClick={onDelete}>
+          <button
+            className="btn-danger text-xs px-2.5 py-1"
+            onClick={onDelete}
+            aria-label={`Delete question ${index + 1}`}
+          >
+            <Icon name="trash" className="size-3.5" />
             Delete
           </button>
         </div>
@@ -527,13 +815,14 @@ function QuestionCard({
           )}
           <div className="mt-3 flex items-center gap-3 text-sm">
             <button
-              className="text-accent font-medium hover:underline"
+              className="link"
               onClick={() => setShowSolution(!showSolution)}
+              aria-expanded={showSolution}
             >
               {showSolution ? "Hide answer & solution" : "Show answer & solution"}
             </button>
             <button
-              className="text-muted hover:text-danger hover:underline text-xs"
+              className="text-muted hover:text-danger hover:underline text-xs rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               onClick={() => setReporting(!reporting)}
             >
               Report this question

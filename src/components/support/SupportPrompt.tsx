@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import Icon from "@/components/Icon";
 
 const STORAGE_KEY = "qpgen.support.prompt.dismissed";
 
@@ -43,9 +44,7 @@ export default function SupportPrompt({ show }: { show: boolean }) {
   return (
     <div className="card p-4 mt-4 bg-accent-soft border-accent/20">
       <div className="flex items-start gap-3">
-        <span aria-hidden className="text-lg leading-none mt-0.5">
-          ♥
-        </span>
+        <Icon name="heart" className="size-5 text-accent mt-0.5" />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium">Got what you needed?</p>
           <p className="text-sm text-muted mt-0.5">

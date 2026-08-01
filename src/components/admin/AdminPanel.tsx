@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import MathText from "@/components/MathText";
 import type { Question } from "@/lib/types";
+import Icon from "@/components/Icon";
 
 export interface AdminData {
   stats: {
@@ -288,8 +289,9 @@ function ConfigSection({
           <strong>{status.resolved === "google" ? "Google Gemini" : "OpenAI"}</strong>
         </span>
         {status.resolved !== config.ai_provider && (
-          <span className="text-warn">
-            ⚠ Falling back because the selected provider&apos;s key is missing.
+          <span className="text-warn inline-flex items-center gap-1.5">
+            <Icon name="alert" className="size-3.5" />
+            Falling back because the selected provider&apos;s key is missing.
           </span>
         )}
       </div>

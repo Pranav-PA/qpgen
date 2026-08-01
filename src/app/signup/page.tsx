@@ -9,7 +9,7 @@ export default async function SignupPage({
 }) {
   const { next } = await searchParams;
   return (
-    <main className="flex-1 flex items-center justify-center p-6">
+    <main id="main" className="flex-1 flex items-center justify-center p-6">
       <div className="w-full max-w-md">
         <AuthForm mode="signup" next={next || "/dashboard"} />
       </div>

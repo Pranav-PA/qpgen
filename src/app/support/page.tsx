@@ -30,7 +30,7 @@ export default async function SupportPage() {
         </header>
       )}
 
-      <main className="flex-1 max-w-3xl w-full mx-auto px-4 sm:px-6 py-10">
+      <main id="main" className="flex-1 max-w-3xl w-full mx-auto px-4 sm:px-6 py-10">
         <h1 className="text-2xl font-semibold">Support QPGen</h1>
         <p className="text-muted mt-2">
           QPGen is free, and it stays free. There is no paid plan, nothing is

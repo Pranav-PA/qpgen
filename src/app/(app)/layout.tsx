@@ -27,7 +27,7 @@ export default function AppLayout({
       <Suspense fallback={<AppHeaderSkeleton />}>
         <HeaderWithProfile />
       </Suspense>
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8">
+      <main id="main" className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8">
         {children}
       </main>
     </>

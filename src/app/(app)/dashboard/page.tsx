@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
+import Icon from "@/components/Icon";
 import PaperList from "@/components/dashboard/PaperList";
 import type { Paper } from "@/lib/types";
 
@@ -32,16 +33,33 @@ export default async function DashboardPage() {
       : 0,
   }));
 
+  const flaggedPapers = list.filter((p) => p.flagged > 0).length;
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold">My papers</h1>
           <p className="text-sm text-muted">
             Welcome back{profile.display_name ? `, ${profile.display_name}` : ""}.
+            {list.length > 0 && (
+              <>
+                {" "}
+                {list.length} paper{list.length === 1 ? "" : "s"}
+                {flaggedPapers > 0 && (
+                  <>
+                    , <span className="text-warn font-medium">{flaggedPapers} with questions to review</span>
+                  </>
+                )}
+                .
+              </>
+            )}
           </p>
         </div>
-        <Link href="/new" className="btn-primary">+ New paper</Link>
+        <Link href="/new" className="btn-primary">
+          <Icon name="plus" className="size-4" />
+          New paper
+        </Link>
       </div>
 
       {list.length === 0 ? (

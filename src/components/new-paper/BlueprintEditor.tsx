@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Icon from "@/components/Icon";
 import NumberInput from "@/components/NumberInput";
 import { renderPdfToImages } from "@/lib/pdf";
 import { MAX_BLUEPRINT_PAGES, MAX_BLUEPRINT_SECTIONS } from "@/lib/constants";
@@ -185,7 +186,14 @@ export default function BlueprintEditor({
             onClick={() => fileInput.current?.click()}
             disabled={busy}
           >
-            {busy ? "Reading blueprint…" : "📄 Upload blueprint"}
+            {busy ? (
+              "Reading blueprint…"
+            ) : (
+              <>
+                <Icon name="upload" className="size-4" />
+                Upload blueprint
+              </>
+            )}
           </button>
           {!bp && (
             <button
@@ -465,7 +473,8 @@ function SubGroups({
           + Add sub-group
         </button>
         <span className={`text-xs ${balanced ? "text-ok" : "text-danger"}`}>
-          {total} / {s.questions_to_set} questions {balanced ? "✓" : "— must match"}
+          {total} / {s.questions_to_set} questions{" "}
+          {balanced ? <Icon name="check" className="size-3 inline" /> : "— must match"}
         </span>
       </div>
     </div>
@@ -561,7 +570,11 @@ function ChapterGrid({
                     }`}
                   >
                     {total} / {s.questions_to_set}
-                    {!ok && <div className="font-normal">✗</div>}
+                    {!ok && (
+                      <div className="flex justify-center">
+                        <Icon name="close" className="size-3" />
+                      </div>
+                    )}
                   </td>
                 );
               })}

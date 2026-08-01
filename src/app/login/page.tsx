@@ -9,7 +9,7 @@ export default async function LoginPage({
 }) {
   const { next, error } = await searchParams;
   return (
-    <main className="flex-1 flex items-center justify-center p-6">
+    <main id="main" className="flex-1 flex items-center justify-center p-6">
       <div className="w-full max-w-md">
         <AuthForm mode="login" next={next || "/dashboard"} initialError={error} />
       </div>
