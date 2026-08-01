@@ -118,6 +118,13 @@ header.letterhead.board .subjline {
 .opts.two-col { column-count: 2; column-gap: 26px; }
 .opt { margin: 1.5px 0; break-inside: avoid; }
 .opt .lbl { font-weight: bold; }
+/* Left on the default column-fill:balance. column-fill:auto was tried to pack
+   the first page tighter and instead dumped the whole last page into column
+   one, leaving the second empty. */
+.questions-columns {
+  column-count: 2; column-gap: 9mm; column-rule: 0.75px solid #ccc;
+}
+.questions-columns .sechead { margin-top: 0; }
 .sechead {
   margin: 14px 0 8px; padding: 4px 0 3px;
   border-top: 1.2px solid #000; border-bottom: 1.2px solid #000;
@@ -198,13 +205,19 @@ function questionHtml(
   q: Question,
   index: number,
   figureDataUris: Map<string, string>,
-  failedFigureIds: Set<string>
+  failedFigureIds: Set<string>,
+  pageColumns: 1 | 2
 ): string {
   const showOptions =
     hasOptions(q.type) && Array.isArray(q.options) && q.options.length > 0;
 
+  // Nesting the option grid's own two-column CSS inside an already-narrow
+  // page column leaves each sub-column too tight to read, so it only kicks
+  // in for the default single-column page layout.
   const compact =
-    showOptions && q.options!.every((o) => o.replace(/\$/g, "").length < 34);
+    pageColumns === 1 &&
+    showOptions &&
+    q.options!.every((o) => o.replace(/\$/g, "").length < 34);
 
   const opts = showOptions
     ? `<div class="opts${compact ? " two-col" : ""}">${q
@@ -302,6 +315,8 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
         .join("")}</ol></div>`
     : "";
 
+  const pageColumns = paper.settings.layout_columns === 2 ? 2 : 1;
+
   const groups = groupBySection(paper)
     .map((g) => {
       const head = g.heading
@@ -315,17 +330,19 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
           const subHead = sub
             ? `<div class="subhead">${escapeHtml(sub)}</div>`
             : "";
-          return subHead + questionHtml(q, g.startIndex - 1 + i, figureDataUris, failedFigureIds);
+          return subHead + questionHtml(q, g.startIndex - 1 + i, figureDataUris, failedFigureIds, pageColumns);
         })
         .join("");
       return head + qs;
     })
     .join("");
+  const questionsBody =
+    pageColumns === 2 ? `<div class="questions-columns">${groups}</div>` : groups;
 
   const body = `
     ${letterheadHtml(paper, logo, false, boardStyle)}
     ${instructions}
-    ${groups}
+    ${questionsBody}
     <p class="endnote">— End of question paper —</p>`;
 
   return shell(paper.title, body);

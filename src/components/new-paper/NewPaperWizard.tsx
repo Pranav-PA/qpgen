@@ -38,6 +38,7 @@ const DEFAULT_SETTINGS: PaperSettings = {
   difficulty: { easy_pct: 30, medium_pct: 50, hard_pct: 20 },
   marks_per_question: 4,
   negative_marks: 1,
+  layout_columns: 1,
 };
 
 const DEFAULT_INSTITUTION: InstitutionDetails = {
@@ -1069,6 +1070,31 @@ function StepReference({
       </div>
 
       <div className="border-t border-line pt-5">
+        <h2 className="font-semibold mb-1">Page layout</h2>
+        <p className="text-sm text-muted mb-3">
+          How questions are arranged on the printed page. Two columns fit more
+          per page — good for short MCQs. One column reads better for long or
+          diagram-heavy questions.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className={(settings.layout_columns ?? 1) === 1 ? "btn-primary text-xs" : "btn-secondary text-xs"}
+            onClick={() => setSettings((s) => ({ ...s, layout_columns: 1 }))}
+          >
+            1 column
+          </button>
+          <button
+            type="button"
+            className={settings.layout_columns === 2 ? "btn-primary text-xs" : "btn-secondary text-xs"}
+            onClick={() => setSettings((s) => ({ ...s, layout_columns: 2 }))}
+          >
+            2 columns
+          </button>
+        </div>
+      </div>
+
+      <div className="border-t border-line pt-5">
         <h2 className="font-semibold mb-3">Ready to generate</h2>
         <dl className="text-sm grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
           <dt className="text-muted">Paper</dt>
@@ -1105,6 +1131,8 @@ function StepReference({
             {settings.difficulty.easy_pct}% easy · {settings.difficulty.medium_pct}% medium ·{" "}
             {settings.difficulty.hard_pct}% hard
           </dd>
+          <dt className="text-muted">Page layout</dt>
+          <dd>{settings.layout_columns === 2 ? "2 columns" : "1 column"}</dd>
         </dl>
         <p className="help mt-3">
           Generation takes a minute or two. Every question is double-checked by

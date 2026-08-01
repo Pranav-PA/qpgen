@@ -91,6 +91,7 @@ export const paperSettingsSchema = z
     extra_instructions: z.string().trim().max(1000).optional(),
     /** Count of questions that must carry an AI-generated diagram. Opt-in; 0/undefined means none. */
     figure_questions: z.number().int().min(0).max(MAX_FIGURE_QUESTIONS).optional(),
+    layout_columns: z.union([z.literal(1), z.literal(2)]).optional(),
   })
   .refine((s) => s.mode !== "blueprint" || !!s.blueprint, {
     message: "Blueprint mode needs a blueprint.",
