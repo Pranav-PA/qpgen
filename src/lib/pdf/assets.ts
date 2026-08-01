@@ -44,21 +44,36 @@ export function katexCss(): string {
 }
 
 /**
- * Institution logos live in public Supabase Storage. Headless Chromium would
- * have to fetch them over the network mid-render, which is slow and fails
- * silently; inlining guarantees the logo actually appears on the page.
+ * Institution logos and question diagrams both live in public Supabase
+ * Storage. Headless Chromium would have to fetch them over the network
+ * mid-render, which is slow and fails silently; inlining guarantees the
+ * image actually appears on the page.
+ *
+ * One retry on top of the original attempt: this runs from a Vercel
+ * serverless function on a cold start, and a single transient network blip
+ * turning into a permanently missing diagram — with no visible sign anything
+ * went wrong — is exactly the failure mode this exists to avoid.
  */
-export async function fetchImageAsDataUri(url: string | null): Promise<string | null> {
+export async function fetchImageAsDataUri(
+  url: string | null,
+  attempts = 2
+): Promise<string | null> {
   if (!url) return null;
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return null;
-    const type = res.headers.get("content-type") || "image/png";
-    if (!type.startsWith("image/")) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.byteLength > 4 * 1024 * 1024) return null;
-    return `data:${type};base64,${buf.toString("base64")}`;
-  } catch {
-    return null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const type = res.headers.get("content-type") || "image/png";
+      if (!type.startsWith("image/")) throw new Error(`unexpected content-type ${type}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.byteLength > 4 * 1024 * 1024) throw new Error("image over 4MB");
+      return `data:${type};base64,${buf.toString("base64")}`;
+    } catch (err) {
+      if (attempt === attempts) {
+        console.error(`[pdf] fetchImageAsDataUri failed after ${attempts} attempt(s): ${url} — ${err instanceof Error ? err.message : err}`);
+        return null;
+      }
+    }
   }
+  return null;
 }

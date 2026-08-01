@@ -112,6 +112,7 @@ header.letterhead.board .subjline {
    that emits an oversized viewBox cannot push a question onto its own page. */
 .fig { margin: 5px 0 5px 20px; break-inside: avoid; page-break-inside: avoid; }
 .fig svg, .fig img { max-width: 62mm; max-height: 52mm; height: auto; display: block; }
+.fig-missing { max-width: 62mm; padding: 8px 10px; border: 1.2px dashed #b00; color: #b00; font-size: 8.5pt; font-style: italic; }
 .fig figcaption { font-size: 8.5pt; color: #555; font-style: italic; margin-top: 2px; }
 .opts { margin-top: 3px; padding-left: 20px; }
 .opts.two-col { column-count: 2; column-gap: 26px; }
@@ -196,7 +197,8 @@ function letterheadHtml(
 function questionHtml(
   q: Question,
   index: number,
-  figureDataUris: Map<string, string>
+  figureDataUris: Map<string, string>,
+  failedFigureIds: Set<string>
 ): string {
   const showOptions =
     hasOptions(q.type) && Array.isArray(q.options) && q.options.length > 0;
@@ -218,20 +220,27 @@ function questionHtml(
    * network, so a figure referenced only by its Supabase Storage URL would
    * silently not appear. A raster figure's data URI is therefore pre-fetched
    * for every question before this function runs (see questionPaperHtml) and
-   * looked up here by question id. If that fetch failed, the figure is
-   * omitted rather than breaking the page — the same fallback the institution
-   * logo already uses for the same reason.
+   * looked up here by question id.
    *
    * Legacy SVG figures need no such step: the markup was allowlisted before
    * storage (lib/svg-sanitize) and is inlined directly.
+   *
+   * A failed fetch renders a visible placeholder rather than silently
+   * dropping the figure: the question text may say "as shown", so a diagram
+   * that is just missing — with no sign anything went wrong — is a
+   * correctness problem for a printed exam, not a cosmetic one.
    */
-  const figureDataUri = q.figure?.image_url ? figureDataUris.get(q.id) : undefined;
+  const hasImage = !!q.figure?.image_url;
+  const figureDataUri = hasImage ? figureDataUris.get(q.id) : undefined;
+  const fetchFailed = hasImage && failedFigureIds.has(q.id);
   const figureBody = figureDataUri
     ? `<img src="${figureDataUri}" alt="${escapeHtml(q.figure?.caption || "Diagram")}"/>`
-    : q.figure?.svg;
+    : fetchFailed
+      ? `<div class="fig-missing">⚠ Diagram could not be loaded for this question. Check the online version before printing.</div>`
+      : q.figure?.svg;
   const figure = figureBody
     ? `<figure class="fig">${figureBody}${
-        q.figure?.caption
+        q.figure?.caption && !fetchFailed
           ? `<figcaption>${escapeHtml(q.figure.caption)}</figcaption>`
           : ""
       }</figure>`
@@ -260,15 +269,25 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
   const inst = paper.institution_details;
   const boardStyle = isBlueprint(paper.settings);
 
-  // Fetched once, in parallel, up front — questionHtml stays a plain
-  // synchronous string-builder rather than threading async through every map().
+  /*
+   * Fetched once, in parallel, up front — questionHtml stays a plain
+   * synchronous string-builder rather than threading async through every
+   * map(). A failure here is logged and passed through explicitly (not just
+   * dropped), because unlike the institution logo, a missing diagram is a
+   * correctness problem: the question text may say "as shown" with nothing
+   * shown. questionHtml renders a visible placeholder rather than silently
+   * printing a diagram-less question.
+   */
   const figureDataUris = new Map<string, string>();
+  const failedFigureIds = new Set<string>();
   await Promise.all(
     paper.questions
       .filter((q) => q.figure?.image_url)
       .map(async (q) => {
+        // fetchImageAsDataUri already logs the URL and reason on final failure.
         const dataUri = await fetchImageAsDataUri(q.figure!.image_url!);
         if (dataUri) figureDataUris.set(q.id, dataUri);
+        else failedFigureIds.add(q.id);
       })
   );
 
@@ -296,7 +315,7 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
           const subHead = sub
             ? `<div class="subhead">${escapeHtml(sub)}</div>`
             : "";
-          return subHead + questionHtml(q, g.startIndex - 1 + i, figureDataUris);
+          return subHead + questionHtml(q, g.startIndex - 1 + i, figureDataUris, failedFigureIds);
         })
         .join("");
       return head + qs;
