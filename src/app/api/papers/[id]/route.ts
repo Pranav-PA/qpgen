@@ -3,6 +3,21 @@ import { z } from "zod";
 import { getApiUser, jsonError } from "@/lib/api";
 import { institutionSchema, questionTypeSchema } from "@/lib/schemas";
 
+/**
+ * z.object() strips any key not listed here by default — it does not error,
+ * it silently drops it. figure was missing from this schema entirely, so
+ * every save (including the automatic one PaperReview fires before every PDF
+ * download) parsed the incoming questions, quietly discarded each one's
+ * figure, and wrote the now-figure-less array back over the database. Not a
+ * rendering bug and not intermittent: the first save after generation loses
+ * every diagram on the paper, permanently.
+ */
+const questionFigureSchema = z.object({
+  svg: z.string().max(20_000).optional(),
+  image_url: z.string().url().max(600).optional(),
+  caption: z.string().max(300).optional(),
+});
+
 const questionSchema = z.object({
   id: z.string().min(1),
   type: questionTypeSchema,
@@ -16,6 +31,7 @@ const questionSchema = z.object({
   negative_marks: z.number().min(0).max(100),
   needs_review: z.boolean(),
   review_reason: z.string().max(2000).optional(),
+  figure: questionFigureSchema.optional(),
   teacher_authored: z.boolean().optional(),
   section_id: z.string().max(40).optional(),
   section_name: z.string().max(40).optional(),
