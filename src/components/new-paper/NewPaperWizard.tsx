@@ -34,6 +34,16 @@ import {
   type PaperSettings,
   type ReferencePage,
 } from "@/lib/types";
+import {
+  BOARDS,
+  CLASS_LEVELS,
+  chapterNames,
+  classLabel,
+  findSubject,
+  presetFor,
+  subjectsFor,
+  type ClassLevel,
+} from "@/lib/curriculum";
 
 /* ------------------------------------------------------------------ */
 
@@ -60,6 +70,25 @@ const DEFAULT_INSTITUTION: InstitutionDetails = {
   max_marks: 60,
   instructions: DEFAULT_INSTRUCTIONS,
 };
+
+/**
+ * Which diagram control a paper gets.
+ *
+ * A fixed count is the right control for a JEE/NEET practice set — one subject,
+ * uniform questions, and the teacher knows how many diagrams they want. It is
+ * the wrong control for a board syllabus paper: Karnataka's Science paper is
+ * three branches that each need their own share, and whether a question needs a
+ * figure depends on the question, not on a quota. There the model decides, and
+ * MAX_FIGURE_QUESTIONS caps the spend server-side.
+ */
+function autoFigureDefault(s: PaperSettings): "fixed" | "auto" {
+  return s.curriculum ? "auto" : "fixed";
+}
+
+/** True when diagrams are switched on, in either mode. */
+function figuresOn(s: PaperSettings): boolean {
+  return s.figure_mode === "auto" || (s.figure_questions ?? 0) > 0;
+}
 
 type GenPhase =
   | { phase: "idle" }
@@ -150,7 +179,7 @@ export default function NewPaperWizard({
     return `${examLabel} ${settings.subject}${chapterPart}`;
   }, [settings]);
 
-  const wantsFigures = (settings.figure_questions ?? 0) > 0;
+  const wantsFigures = figuresOn(settings);
 
   function applyLastPaper() {
     if (lastSettings) setSettings(lastSettings);
@@ -269,7 +298,9 @@ export default function NewPaperWizard({
 
   /* ----------------------------- generation driver */
   async function generate() {
-    if (wantsFigures) {
+    // Only the fixed-count mode has a number to validate; in "auto" the model
+    // picks the questions and the server enforces the ceiling.
+    if (wantsFigures && settings.figure_mode !== "auto") {
       const n = settings.figure_questions;
       if (!n || n < 1) {
         setStepError("Enter how many questions should have a diagram, or turn the option off.");
@@ -583,6 +614,165 @@ function Stepper({
 }
 
 /* ================================================================== */
+
+/**
+ * Board syllabus picker. Choosing a board/class/subject fills the chapter list
+ * from the built-in curriculum data and records which syllabus the paper was
+ * built against, which is what the generator and verifier are grounded on.
+ *
+ * Leaving it on "Not a board syllabus" preserves the original free-text
+ * behaviour exactly — everything here is additive.
+ */
+function SyllabusPicker({
+  settings,
+  setSettings,
+}: {
+  settings: PaperSettings;
+  setSettings: (s: PaperSettings) => void;
+}) {
+  const ref = settings.curriculum;
+  const level = ref?.class_level;
+  const options = level ? subjectsFor("KSEEB", level) : [];
+  const subject = findSubject(ref);
+
+  function selectSubject(key: string) {
+    if (!level) return;
+    const next = subjectsFor("KSEEB", level).find((s) => s.key === key);
+    if (!next) return;
+    const ref = { board: "KSEEB", class_level: level, subject_key: key } as const;
+    const preset = presetFor(ref);
+    // Where the board actually publishes a pattern, the teacher should land on
+    // it rather than have to go find it. An unofficial starting-point pattern
+    // (classes 8 and 9) stays behind a button — pre-applying a shape we made up
+    // would pass it off as the real thing.
+    const blueprint = preset?.official ? preset.build() : undefined;
+    setSettings({
+      ...settings,
+      curriculum: ref,
+      exam_type: "Board",
+      subject: next.label,
+      // Every chapter starts selected; the teacher removes what this paper
+      // does not cover, which is far less work than typing sixteen names.
+      chapters: blueprint
+        ? blueprint.rows.map((r) => r.chapter)
+        : chapterNames(next),
+      // Where the board publishes its own easy/average/difficult split, use it
+      // rather than the app's generic default.
+      ...(next.difficulty ? { difficulty: next.difficulty } : {}),
+      ...(blueprint
+        ? {
+            mode: "blueprint" as const,
+            blueprint,
+            question_count: blueprintQuestionCount(blueprint),
+          }
+        : {}),
+      // Board papers let the model choose which questions warrant a diagram.
+      // Checked against whether figures are on at all, not against figure_mode,
+      // so a paper that had a fixed count picked before the syllabus still
+      // converts — and its now-meaningless count is cleared rather than left
+      // behind as stale state.
+      ...(figuresOn(settings)
+        ? { figure_mode: "auto" as const, figure_questions: undefined }
+        : {}),
+    });
+  }
+
+  return (
+    <fieldset className="border border-line rounded-lg p-3">
+      <legend className="text-xs text-muted px-1">Syllabus</legend>
+      <div className="grid sm:grid-cols-3 gap-3">
+        <div>
+          <label htmlFor="board" className="label">Board</label>
+          <select
+            id="board"
+            className="input"
+            value={ref ? "KSEEB" : ""}
+            onChange={(e) => {
+              if (!e.target.value) {
+                // Back to free text: drop the syllabus link and the auto
+                // figure mode that came with it, but keep chapters already
+                // loaded — the teacher may still want them.
+                setSettings({
+                  ...settings,
+                  curriculum: undefined,
+                  figure_mode: undefined,
+                });
+                return;
+              }
+              setSettings({
+                ...settings,
+                curriculum: { board: "KSEEB", class_level: 10, subject_key: "" },
+                exam_type: "Board",
+              });
+            }}
+          >
+            <option value="">Not a board syllabus</option>
+            {BOARDS.map((b) => (
+              <option key={b.value} value={b.value}>{b.label}</option>
+            ))}
+          </select>
+        </div>
+        {ref && (
+          <>
+            <div>
+              <label htmlFor="classLevel" className="label">Class</label>
+              <select
+                id="classLevel"
+                className="input"
+                value={ref.class_level}
+                onChange={(e) =>
+                  setSettings({
+                    ...settings,
+                    curriculum: {
+                      ...ref,
+                      class_level: Number(e.target.value) as ClassLevel,
+                      // Subject keys are class-scoped, so the old one no longer
+                      // resolves — force a fresh pick rather than half-applying.
+                      subject_key: "",
+                    },
+                  })
+                }
+              >
+                {CLASS_LEVELS.map((c) => (
+                  <option key={c} value={c}>{classLabel(c)}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="curriculumSubject" className="label">Subject</label>
+              <select
+                id="curriculumSubject"
+                className="input"
+                value={ref.subject_key}
+                onChange={(e) => selectSubject(e.target.value)}
+              >
+                <option value="">Choose a subject…</option>
+                {options.map((s) => (
+                  <option key={s.key} value={s.key}>{s.label}</option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
+      </div>
+      {subject ? (
+        <p className="help mt-2">
+          {subject.chapters.length} chapters loaded from the Karnataka (KTBS)
+          {" "}{classLabel(subject.class_level)} textbook.
+          {subject.description ? ` ${subject.description}` : ""}
+          {" "}Questions are written to this syllabus, not to NCERT/CBSE.
+        </p>
+      ) : (
+        <p className="help mt-2">
+          Pick your board syllabus to load its chapters and paper pattern, or
+          leave this off and type the subject and chapters yourself below.
+        </p>
+      )}
+    </fieldset>
+  );
+}
+
+/* ================================================================== */
 /* Step 1 — exam & question settings                                   */
 
 function StepExam({
@@ -610,7 +800,9 @@ function StepExam({
     if (parts.length === 0) return;
     const merged = [...settings.chapters];
     for (const p of parts) if (!merged.includes(p)) merged.push(p);
-    setSettings({ ...settings, chapters: merged.slice(0, 10) });
+    // Matches the 40 the API schema allows — a full board subject is 16–39
+    // chapters, so the old cap of 10 silently truncated them.
+    setSettings({ ...settings, chapters: merged.slice(0, 40) });
     setChapterInput("");
   }
 
@@ -621,6 +813,8 @@ function StepExam({
 
   return (
     <div className="space-y-5">
+      <SyllabusPicker settings={settings} setSettings={setSettings} />
+
       <div className="grid sm:grid-cols-2 gap-4">
         <div>
           <label htmlFor="examType" className="label">Exam type</label>
@@ -702,7 +896,11 @@ function StepExam({
       )}
 
       {blueprintMode ? (
-        <BlueprintEditor blueprint={settings.blueprint ?? null} setBlueprint={setBlueprint} />
+        <BlueprintEditor
+          blueprint={settings.blueprint ?? null}
+          setBlueprint={setBlueprint}
+          curriculum={settings.curriculum}
+        />
       ) : (
       <>
       <div>
@@ -1035,7 +1233,7 @@ function StepReference({
   settings: PaperSettings;
   maxMarks: number;
 }) {
-  const wantsFigures = (settings.figure_questions ?? 0) > 0;
+  const wantsFigures = figuresOn(settings);
   const figureModel = images.raster !== "off" ? IMAGE_MODEL_FOR_TIER[images.raster] : null;
   const figureCostEach = figureModel ? IMAGE_COST_USD[figureModel] ?? 0 : 0;
   const fileInput = useRef<HTMLInputElement>(null);
@@ -1128,8 +1326,8 @@ function StepReference({
           <>
             <p className="text-sm text-muted mb-3">
               Some questions can carry an AI-generated diagram — a circuit, a
-              labelled figure, a graph. Unlike the rest of generation, each one
-              is billed per image, so you choose exactly how many.
+              labelled figure, a graph. Each one is billed per image, unlike the
+              rest of generation.
               {images.raster === "low" && (
                 <> Running on the low-cost model at the moment, so image
                 quality may be rougher than usual.</>
@@ -1143,15 +1341,29 @@ function StepReference({
                   const checked = e.target.checked;
                   setSettings((s) => ({
                     ...s,
-                    figure_questions: checked
-                      ? Math.min(2, s.question_count, MAX_FIGURE_QUESTIONS)
-                      : undefined,
+                    figure_mode: checked ? autoFigureDefault(s) : undefined,
+                    figure_questions:
+                      checked && autoFigureDefault(s) === "fixed"
+                        ? Math.min(2, s.question_count, MAX_FIGURE_QUESTIONS)
+                        : undefined,
                   }));
                 }}
               />
               <span>Include diagram questions</span>
             </label>
-            {wantsFigures && (
+            {wantsFigures && settings.figure_mode === "auto" && (
+              <p className="help">
+                The AI decides which questions need a diagram and how many —
+                a combined-subject paper needs them spread across its branches,
+                and only some questions need one at all. At most{" "}
+                {MAX_FIGURE_QUESTIONS} images per paper
+                {figureModel && (
+                  <> (up to ≈ ${(figureCostEach * MAX_FIGURE_QUESTIONS).toFixed(2)})</>
+                )}
+                .
+              </p>
+            )}
+            {wantsFigures && settings.figure_mode !== "auto" && (
               <div className="flex items-center gap-3">
                 <label htmlFor="figure-count" className="label text-xs">
                   How many of the {settings.question_count} questions?

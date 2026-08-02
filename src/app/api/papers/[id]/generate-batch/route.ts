@@ -10,6 +10,7 @@ import {
   verifyQuestions,
 } from "@/lib/ai/generate";
 import { generateQuestionImage, uploadQuestionImage } from "@/lib/ai/images";
+import { MAX_FIGURE_QUESTIONS } from "@/lib/constants";
 import type { Paper, Question } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -83,6 +84,30 @@ export async function POST(
     });
     await logUsage({ user_id: user.id, action: "verify_batch", usage: verification.usage });
 
+    /*
+     * Image budget for this batch.
+     *
+     * In "auto" mode the model chooses which questions carry a diagram, and it
+     * only ever sees one batch at a time — it cannot budget across the paper.
+     * Each image is a real per-image bill, so the ceiling is enforced here
+     * instead: count what the paper already has and only honour that many more
+     * figure_specs, in order. "fixed" mode is already bounded by the slot plan,
+     * but the same cap applies harmlessly.
+     */
+    const usedFigures = existing.filter((q) => q.figure?.image_url).length;
+    let figureBudget = Math.max(0, MAX_FIGURE_QUESTIONS - usedFigures);
+    /** Spec to render for each question, or null to keep it text-only. */
+    const figureToRender = shuffled.map((raw) => {
+      if (!raw.figure_spec || images.raster === "off") return null;
+      if (figureBudget <= 0) return null;
+      figureBudget -= 1;
+      return raw.figure_spec;
+    });
+    /** Wanted a diagram but lost it to the ceiling, not to a render failure. */
+    const figureCapped = shuffled.map(
+      (raw, i) => !!raw.figure_spec && images.raster !== "off" && !figureToRender[i]
+    );
+
     const newQuestions: Question[] = await Promise.all(
       shuffled.map(async (raw, i) => {
         const verdict = verification.verdicts.find((v) => v.index === i);
@@ -99,10 +124,11 @@ export async function POST(
          */
         let imageUrl: string | undefined;
         let imageFailed = false;
-        if (raw.figure_spec && images.raster !== "off") {
+        const figureSpec = figureToRender[i];
+        if (figureSpec) {
           try {
             const rendered = await generateQuestionImage({
-              spec: raw.figure_spec,
+              spec: figureSpec,
               raster: images.raster,
             });
             if (rendered) {
@@ -152,6 +178,9 @@ export async function POST(
           imageFailed
             ? "A diagram was requested for this question but could not be generated — it was kept as text-only."
             : null,
+          figureCapped[i]
+            ? `This question suited a diagram, but the paper had already used its limit of ${MAX_FIGURE_QUESTIONS} generated images, so it was kept as text-only. Check it still reads clearly without one.`
+            : null,
         ].filter(Boolean);
 
         return {
@@ -171,7 +200,8 @@ export async function POST(
           figure: imageUrl
             ? { image_url: imageUrl, caption: raw.figure_spec?.slice(0, 150) }
             : undefined,
-          needs_review: !verdict || !verdict.ok || unresolved || !!imageUrl || imageFailed,
+          needs_review:
+            !verdict || !verdict.ok || unresolved || !!imageUrl || imageFailed || figureCapped[i],
           review_reason: reasons.length > 0 ? reasons.join(" ") : undefined,
         };
       })

@@ -100,10 +100,14 @@ header.letterhead.board .subjline {
 .instructions p { margin: 1px 0; }
 .instrlist { margin: 0; padding-left: 20px; }
 .instrlist li { margin: 1.5px 0; }
+/* Karnataka prints the run's instruction on the left and its "3 x 2 = 6" total
+   hard against the right margin, so the two are laid out as a row. */
 .subhead {
   font-weight: bold; font-size: 10.5pt; margin: 10px 0 5px;
+  display: flex; gap: 10px; align-items: baseline; justify-content: space-between;
   break-after: avoid; page-break-after: avoid;
 }
+.subhead .submarks { white-space: nowrap; }
 .q { break-inside: avoid; page-break-inside: avoid; margin-bottom: 11px; }
 .q .stem { display: flex; gap: 7px; align-items: baseline; }
 .q .num { font-weight: bold; white-space: nowrap; }
@@ -328,7 +332,9 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
         .map((q, i) => {
           const sub = subHeadingFor(g, i);
           const subHead = sub
-            ? `<div class="subhead">${escapeHtml(sub)}</div>`
+            ? `<div class="subhead"><span>${escapeHtml(sub.label)}</span>${
+                sub.marks ? `<span class="submarks">${escapeHtml(sub.marks)}</span>` : ""
+              }</div>`
             : "";
           return subHead + questionHtml(q, g.startIndex - 1 + i, figureDataUris, failedFigureIds, pageColumns);
         })

@@ -11,11 +11,20 @@ import {
   blueprintTotalMarks,
   defaultSectionInstruction,
   defaultTypeForMarks,
+  hasPerGroupMarks,
+  sectionAnswerableMarks,
   sectionGridTotal,
   subGroupTotal,
   type Blueprint,
   type QuestionType,
 } from "@/lib/types";
+import {
+  STRAND_LABELS,
+  findSubject,
+  presetFor,
+  strandMarkTotals,
+  type CurriculumRef,
+} from "@/lib/curriculum";
 
 const TYPE_OPTIONS = Object.keys(QUESTION_TYPE_LABELS) as QuestionType[];
 
@@ -38,14 +47,19 @@ function emptyBlueprint(): Blueprint {
 export default function BlueprintEditor({
   blueprint,
   setBlueprint,
+  curriculum,
 }: {
   blueprint: Blueprint | null;
   setBlueprint: (b: Blueprint) => void;
+  /** Set when the teacher picked a board syllabus — unlocks the preset. */
+  curriculum?: CurriculumRef;
 }) {
   const [busy, setBusy] = useState(false);
   const [info, setInfo] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const bp = blueprint;
+  const preset = presetFor(curriculum);
+  const subject = findSubject(curriculum);
 
   async function handleFile(file: File | undefined) {
     if (!file) return;
@@ -195,6 +209,24 @@ export default function BlueprintEditor({
               </>
             )}
           </button>
+          {preset && (
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={busy}
+              onClick={() => {
+                setBlueprint(preset.build());
+                setInfo(
+                  preset.official
+                    ? `Loaded the ${preset.label} — ${preset.total_marks} marks. Structure is from ${preset.source}. The chapter grid below is only a starting point, so check it against your own blueprint before generating.`
+                    : `Loaded an ${preset.total_marks}-mark starting point. ${preset.source}`
+                );
+              }}
+            >
+              <Icon name="check" className="size-4" />
+              Use {preset.official ? preset.label : "a starting-point pattern"}
+            </button>
+          )}
           {!bp && (
             <button
               type="button"
@@ -223,7 +255,7 @@ export default function BlueprintEditor({
             onAddRow={addRow}
             onRemoveRow={removeRow}
           />
-          <Totals bp={bp} />
+          <Totals bp={bp} subject={subject} />
         </>
       )}
     </div>
@@ -340,9 +372,18 @@ function SectionsTable({
 
             <SubGroups section={s} onUpdate={onUpdate} />
 
-            <p className="help mt-2">
-              Prints as: <em>{s.instruction?.trim() || defaultSectionInstruction(s)}</em>
-            </p>
+            {/* A part whose runs set their own marks has no single instruction
+                — each run prints its own "3 × 2 = 6" line instead. */}
+            {hasPerGroupMarks(s) ? (
+              <p className="help mt-2">
+                Each sub-group prints its own marks line. This part is worth{" "}
+                <strong>{sectionAnswerableMarks(s)}</strong> marks.
+              </p>
+            ) : (
+              <p className="help mt-2">
+                Prints as: <em>{s.instruction?.trim() || defaultSectionInstruction(s)}</em>
+              </p>
+            )}
           </div>
         ))}
       </div>
@@ -403,7 +444,7 @@ function SubGroups({
       <p className="text-xs font-medium mb-2">Sub-groups within {s.name}</p>
       <div className="space-y-2">
         {groups.map((g, i) => (
-          <div key={g.id} className="grid gap-2 sm:grid-cols-[1fr_auto_auto_auto] items-end">
+          <div key={g.id} className="grid gap-2 sm:grid-cols-[1fr_auto_auto_auto_auto] items-end">
             <div>
               <label className="text-xs text-muted">Heading</label>
               <input
@@ -436,6 +477,27 @@ function SubGroups({
                 fallback={1}
                 value={g.count}
                 onChange={(n) => patch(i, { count: n })}
+              />
+            </div>
+            {/* A run may carry its own mark value — Karnataka's SSLC PART-A runs
+                1-, 2-, 3- and 4-mark groups under one heading. Blank falls back
+                to the part's value, which is how every older paper behaves. */}
+            <div>
+              <label className="text-xs text-muted">Marks each</label>
+              <NumberInput
+                className="input text-sm w-24"
+                aria-label={`Sub-group ${i + 1} marks per question`}
+                min={0.5}
+                max={50}
+                step={0.5}
+                fallback={s.marks_per_question}
+                value={g.marks_per_question ?? s.marks_per_question}
+                onChange={(n) =>
+                  patch(i, {
+                    marks_per_question: n,
+                    question_type: defaultTypeForMarks(n),
+                  })
+                }
               />
             </div>
             <button
@@ -592,10 +654,19 @@ function ChapterGrid({
 
 /* ================================================================== */
 
-function Totals({ bp }: { bp: Blueprint }) {
+function Totals({
+  bp,
+  subject,
+}: {
+  bp: Blueprint;
+  subject: ReturnType<typeof findSubject>;
+}) {
   const mismatches = bp.sections.filter(
     (s) => sectionGridTotal(bp, s.id) !== s.questions_to_set
   );
+  // A combined subject splits its marks across branches; showing the split
+  // makes it obvious when editing a part has knocked the balance out.
+  const strands = subject ? strandMarkTotals(bp, subject) : [];
   return (
     <div className="border-t border-line pt-4">
       <dl className="text-sm grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
@@ -603,6 +674,17 @@ function Totals({ bp }: { bp: Blueprint }) {
         <dd className="font-medium">{blueprintQuestionCount(bp)}</dd>
         <dt className="text-muted">Maximum marks</dt>
         <dd className="font-medium">{blueprintTotalMarks(bp)}</dd>
+        {strands.some((s) => s.marks > 0) && (
+          <>
+            <dt className="text-muted">Marks by branch</dt>
+            <dd className="font-medium">
+              {strands
+                .filter((s) => s.marks > 0)
+                .map((s) => `${STRAND_LABELS[s.strand]} ${s.marks}`)
+                .join(" · ")}
+            </dd>
+          </>
+        )}
       </dl>
       {mismatches.length > 0 && (
         <p

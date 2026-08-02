@@ -56,6 +56,11 @@ export async function POST(
           section_id: old.section_id,
           section_name: old.section_name,
           marks: old.marks,
+          // Without this a regenerated question can drift out of the branch its
+          // part is headed with — a Chemistry question under PART-A (PHYSICS).
+          strand: paper.settings.blueprint?.sections.find(
+            (s) => s.id === old.section_id
+          )?.strand,
         },
       ],
       // The old question goes on the avoid-list so we get something new.

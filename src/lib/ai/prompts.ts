@@ -1,9 +1,101 @@
 import type { PaperSettings } from "@/lib/types";
+import {
+  classLabel,
+  drawableFigures,
+  excludedChapters,
+  findSubject,
+  retainedChapters,
+} from "@/lib/curriculum";
 
 export function examLabel(settings: PaperSettings): string {
+  const subject = findSubject(settings.curriculum);
+  if (subject) {
+    const board =
+      subject.class_level === 10
+        ? "Karnataka KSEEB/KSEAB SSLC (Class 10 board)"
+        : `Karnataka KSEEB ${classLabel(subject.class_level)}`;
+    return `${board} ${subject.label}`;
+  }
   return settings.exam_type === "Custom" && settings.exam_type_custom
     ? settings.exam_type_custom
     : `${settings.exam_type} (India)`;
+}
+
+/**
+ * Syllabus grounding for Karnataka papers.
+ *
+ * The failure mode this exists to prevent is NCERT drift. Karnataka's textbooks
+ * are NCERT-derived but not current NCERT: the state kept several chapters
+ * NCERT deleted in its 2023 rationalisation, and reorders Class 10 Maths. A
+ * model that reaches for what it knows best writes CBSE questions, silently
+ * drops the retained chapters, or declares them out of syllabus.
+ */
+export function curriculumRules(settings: PaperSettings): string {
+  const subject = findSubject(settings.curriculum);
+  if (!subject) return "";
+
+  const level = subject.class_level;
+  const retained = retainedChapters(level);
+  const lines = [
+    `KARNATAKA SYLLABUS GROUNDING (${classLabel(level)} ${subject.label}):`,
+    `- Write to the Karnataka Textbook Society (KTBS) ${classLabel(level)} ${subject.label} textbook prescribed by KSEEB/KSEAB — NOT the NCERT or CBSE book. Where the two differ in content, terminology, notation or emphasis, Karnataka's book wins.`,
+    `- Stay inside what a ${classLabel(level)} student has been taught. Never require a technique from a later class, and never assume a topic the Karnataka book covers in a different year.`,
+  ];
+
+  if (retained.length > 0) {
+    lines.push(
+      `- These chapters ARE part of the Karnataka syllabus even though current NCERT has removed them: ${retained.join("; ")}. Treat them as fully examinable at this level and write normal board-level questions on them — do not refuse them, do not call them out of syllabus, and do not treat them as advanced.`
+    );
+  }
+
+  const excluded = excludedChapters(subject);
+  if (excluded.length > 0) {
+    lines.push(
+      `- These chapters are in the textbook but are OUT of the examinable syllabus: ${excluded
+        .map((c) => c.name)
+        .join("; ")}. Never draw on them, and never require their content to answer a question about another chapter.`
+    );
+  }
+  if (subject.themes && subject.themes.length > 0) {
+    lines.push(
+      `- The board allocates marks by theme, not by chapter: ${subject.themes
+        .map((t) => `${t.name} ${t.marks}`)
+        .join("; ")} (total ${subject.themes.reduce((t, x) => t + x.marks, 0)}). Spread questions across the chapters within a theme rather than concentrating on one.`
+    );
+  }
+  if (level === 10 && subject.key === "10-science") {
+    // Straight from the board's own question-paper format document — the whole
+    // point of the 2019-20 redesign was to move the paper off recall.
+    lines.push(
+      `- Cognitive mix the board asks for: about 20% of marks on remembering, 40% on understanding, 20% on applying, and 5% on higher-order thinking (analysing, comparing, deciding, generalising, cause-and-effect). The paper must NOT reward rote memorisation — prefer questions that ask the student to reason from given data, compare, explain why, or draw a conclusion.`
+    );
+    const figures = drawableFigures(subject);
+    if (figures.length > 0) {
+      lines.push(
+        `- About 15% of marks test diagram-drawing SKILL, i.e. the student draws and labels the figure in their answer. The board publishes a closed list of drawable diagrams — if you write such a question it must ask for one of these and nothing else: ${figures.join(
+          "; "
+        )}. Questions may also be built around a diagram the student is shown, which is a different thing and not restricted to this list.`
+      );
+    }
+    lines.push(
+      `- Difficulty split the board publishes: 30% easy, 50% average, 20% difficult.`
+    );
+  }
+  if (subject.description) {
+    lines.push(`- Paper shape: ${subject.description}`);
+  }
+  if (subject.strand_order && subject.strand_order.length > 1) {
+    lines.push(
+      `- This is a combined subject. Every question must belong to the branch named by the part it is written for. A Chemistry question printed under the Physics part is wrong no matter how good the question is.`
+    );
+  }
+  if (level === 10) {
+    lines.push(
+      `- Karnataka's SSLC conventions: an MCQ asks the student to "choose the correct alternative and write the complete answer along with its letter of alphabet". Questions worth 3 marks or more are normally split into labelled sub-parts a), b) and where the marks warrant it c) — write them that way, inside question_text, with the sub-parts adding up to the stated marks.`
+    );
+  }
+
+  return lines.join("\n");
 }
 
 const LATEX_RULES = `LaTeX rules:
@@ -18,8 +110,9 @@ const SELF_CONTAINED_RULES = `Self-containment rules (critical):
 - Every other question — the ones NOT marked — must never reference a figure, diagram, graph, circuit, or table. If a concept normally needs a diagram and the question was not marked for one, describe the setup precisely in words instead, or choose a different question.`;
 
 export function generationSystemPrompt(settings: PaperSettings): string {
+  const curriculum = curriculumRules(settings);
   return `You are an expert ${settings.subject} question setter for ${examLabel(settings)} examinations, writing questions for a real exam paper that a teacher will review and distribute.
-
+${curriculum ? `\n${curriculum}\n` : ""}
 ABSOLUTE PRIORITY — chapter scoping and correctness:
 - Every question must test content that belongs strictly to the specified chapter(s)/topic(s) of the standard ${examLabel(settings)} syllabus. If a fact or technique from another chapter would be required to solve it, do not write that question.
 - Every question must be factually correct with exactly one defensible answer. Work each question out fully yourself before committing to it.
@@ -53,11 +146,14 @@ Variety:
 }
 
 export function verifierSystemPrompt(settings: PaperSettings): string {
-  return `You are a meticulous senior ${settings.subject} examiner reviewing draft questions for a ${examLabel(settings)} paper before printing. You did NOT write these questions. For EACH question, independently:
+  const curriculum = curriculumRules(settings);
+  return `You are a meticulous senior ${settings.subject} examiner reviewing draft questions for a ${examLabel(settings)} paper before printing. You did NOT write these questions.
+${curriculum ? `\n${curriculum}\n` : ""}
+For EACH question, independently:
 
 1. Solve it yourself from scratch, without looking at the provided answer or solution first.
 2. Then compare: does your answer match the stated correct_answer?
-3. Check chapter scope: does the question belong strictly to the allowed chapter(s) at ${examLabel(settings)} level?
+3. Check chapter scope: does the question belong strictly to the allowed chapter(s) at ${examLabel(settings)} level?${curriculum ? " For a Karnataka paper this means answerable from the KTBS textbook for that class — fail anything needing a later class's technique, and equally do not fail a question merely because current NCERT dropped its chapter." : ""}
 4. Check exactly-one-correct: for MCQs, verify no other option is also defensible and the four options are distinct. For descriptive questions (one_word / short_answer / long_answer) there are no options — instead confirm the model answer is factually right, actually answers what was asked, and that the work demanded matches the marks stated.
 5. Check self-containment: a question is marked "has_figure: true" when a real diagram is generated and printed alongside it — that one may reference "the circuit/diagram/graph shown". Every question with "has_figure: false" must contain every value needed to solve it and must not reference any figure, diagram, graph, circuit, or table.
 6. Check the solution is internally consistent with stated_correct_answer_text: the worked solution must arrive at that same answer. Note that options get re-ordered after generation, so a solution naming an option letter is unreliable by construction — judge consistency by the answer's content/value, and fail the question if the solution's conclusion contradicts it.
