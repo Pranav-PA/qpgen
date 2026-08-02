@@ -98,7 +98,7 @@ export function curriculumRules(settings: PaperSettings): string {
   return lines.join("\n");
 }
 
-const LATEX_RULES = `LaTeX rules:
+export const LATEX_RULES = `LaTeX rules:
 - Write ALL mathematical/chemical expressions as inline LaTeX delimited by $...$, e.g. $v = u + at$, $\\frac{1}{2}mv^2$, $H_2SO_4$ (chemistry uses subscripts/superscripts in math mode).
 - Never use display math ($$...$$), \\[ \\], or markdown formatting.
 - Plain prose stays outside the dollar signs.
@@ -108,6 +108,19 @@ const LATEX_RULES = `LaTeX rules:
 const SELF_CONTAINED_RULES = `Self-containment rules (critical):
 - Questions must be fully answerable from their text alone, UNLESS the composition below marks that specific question as carrying a diagram (it will say "needs a diagram — write figure_spec"). Only for those marked questions may you write "as shown", "in the circuit shown", etc. — a real image matching your figure_spec is generated and printed alongside it.
 - Every other question — the ones NOT marked — must never reference a figure, diagram, graph, circuit, or table. If a concept normally needs a diagram and the question was not marked for one, describe the setup precisely in words instead, or choose a different question.`;
+
+/**
+ * Shared with editQuestionSystemPrompt below, which needs the model to revise
+ * within the type it's given rather than choose one — same shapes, framed as
+ * "the format for the type you're revising" instead of "pick one of these".
+ */
+export const QUESTION_TYPE_FORMAT_RULES = `Question type formats:
+- "mcq": exactly 4 options; exactly one correct. correct_answer MUST be the single option letter "A", "B", "C", or "D" — never the option's text. Options must be plausible distractors reflecting common student errors — not obviously wrong fillers. Do not embed option letters in the option text.
+- "one_word": a 1-mark question answered in a single word, term, symbol, value or short phrase (including fill-in-the-blank with a "______"). No options. correct_answer is that exact expected answer.
+- "short_answer": a descriptive question worth 2–3 marks — a definition, a statement of a law, two or three differences, a short derivation step, or a one-step numerical. No options. correct_answer is a concise model answer (1–3 sentences or the final value); solution gives the full expected answer with the marking points a examiner would award.
+- "long_answer": a descriptive question worth 4–5 marks — a full derivation, a labelled explanation of a principle or working, or a multi-step numerical. No options. correct_answer is a concise statement of the expected result; solution is the complete model answer written out step by step, with the marking points made explicit.
+- "numerical": no options. correct_answer is the numeric value as a string (include units in the question, e.g. "…in m/s²"; round as instructed in the question).
+- "assertion_reason": question_text contains "Assertion (A): …" and "Reason (R): …" on separate lines. Options are exactly: ["Both A and R are true and R is the correct explanation of A", "Both A and R are true but R is NOT the correct explanation of A", "A is true but R is false", "A is false but R is true"]. correct_answer MUST be the option letter "A"–"D".`;
 
 export function generationSystemPrompt(settings: PaperSettings): string {
   const curriculum = curriculumRules(settings);
@@ -122,13 +135,7 @@ ${LATEX_RULES}
 
 ${SELF_CONTAINED_RULES}
 
-Question type formats:
-- "mcq": exactly 4 options; exactly one correct. correct_answer MUST be the single option letter "A", "B", "C", or "D" — never the option's text. Options must be plausible distractors reflecting common student errors — not obviously wrong fillers. Do not embed option letters in the option text.
-- "one_word": a 1-mark question answered in a single word, term, symbol, value or short phrase (including fill-in-the-blank with a "______"). No options. correct_answer is that exact expected answer.
-- "short_answer": a descriptive question worth 2–3 marks — a definition, a statement of a law, two or three differences, a short derivation step, or a one-step numerical. No options. correct_answer is a concise model answer (1–3 sentences or the final value); solution gives the full expected answer with the marking points a examiner would award.
-- "long_answer": a descriptive question worth 4–5 marks — a full derivation, a labelled explanation of a principle or working, or a multi-step numerical. No options. correct_answer is a concise statement of the expected result; solution is the complete model answer written out step by step, with the marking points made explicit.
-- "numerical": no options. correct_answer is the numeric value as a string (include units in the question, e.g. "…in m/s²"; round as instructed in the question).
-- "assertion_reason": question_text contains "Assertion (A): …" and "Reason (R): …" on separate lines. Options are exactly: ["Both A and R are true and R is the correct explanation of A", "Both A and R are true but R is NOT the correct explanation of A", "A is true but R is false", "A is false but R is true"]. correct_answer MUST be the option letter "A"–"D".
+${QUESTION_TYPE_FORMAT_RULES}
 
 Question text hygiene:
 - question_text contains ONLY the question a student reads. Never prefix it with the part/section name, the question number, or the marks (do not write "PART-A (1 mark): ..." or "Q3."). The paper already prints section headings, numbering and marks around your text.
@@ -161,6 +168,41 @@ For EACH question, independently:
 Be strict: if you are not confident the question is correct, in scope, and unambiguous, fail it. A wrong question reaching students is far worse than a false alarm — the teacher sees your reason and decides.
 
 Return a verdict for every question index you were given.`;
+}
+
+/**
+ * A teacher revising ONE existing question, as opposed to writing a fresh one
+ * (generationSystemPrompt) — the model is handed the current content and a
+ * note describing what to change, and must leave everything the note doesn't
+ * mention as close to the original as possible. Chapter/marks/type are pinned
+ * by the app, not the model — the same way regenerate-question already pins
+ * them, this just also pins the CONTENT of everything not being edited.
+ */
+export function editQuestionSystemPrompt(settings: PaperSettings): string {
+  const curriculum = curriculumRules(settings);
+  return `You are revising ONE existing question for a ${examLabel(settings)} paper, at a teacher's request. You did not write the original question and must not rewrite it wholesale — this is a targeted fix, not a fresh question.
+${curriculum ? `\n${curriculum}\n` : ""}
+You are given the question exactly as currently printed — text, options if any, correct answer, solution, and whether it currently carries a diagram — followed by a note from the teacher describing what to change.
+
+Editing rules:
+- Apply ONLY what the note asks for. Anything it does not mention — wording, numbers, options, difficulty, approach — must stay as close to the original as sensibly possible.
+- The chapter, mark value and question type are fixed by the paper and are not yours to change. If the note asks for something outside the current chapter or type, do the closest thing achievable within them.
+- Every fact must be correct and match ${examLabel(settings)} scope, exactly as in normal question writing.
+- If you change the question or the answer at all, the solution must be rewritten to match — never leave a solution that no longer supports the revised correct_answer.
+
+${LATEX_RULES}
+
+${QUESTION_TYPE_FORMAT_RULES}
+
+Diagram decision — set figure_action to exactly one of:
+- "keep": the note is not about the diagram (true for most edits). Leave figure_spec null.
+- "remove": the note asks to remove the diagram, or your revision no longer needs one. Leave figure_spec null.
+- "add": the question currently has NO diagram, and the note asks for one, or your revision now requires one. Write a complete plain-text figure_spec: every component, value, label, and how they are spatially arranged or connected — someone who cannot see the question must be able to draw it correctly from figure_spec alone. Never phrase the question as asking the STUDENT to draw it.
+- "change": the question currently HAS a diagram and the note asks to change it. Leave figure_spec null — the existing image is edited directly from the teacher's note, not redrawn from a fresh description.
+Self-containment: if the result has no diagram (figure_action "keep" with none existing, or "remove"), question_text must not reference any figure, diagram, graph, circuit or table. If the result has one ("add", "change", or "keep" with one existing), the question may reference "the diagram/circuit/figure shown".
+
+Solutions:
+- Never identify an option by its letter inside the solution (do not write "hence option B") — options are re-ordered after you write them, so refer to one by its content or value instead.`;
 }
 
 export const BLUEPRINT_EXTRACTION_PROMPT = `You are reading an official exam BLUEPRINT table (Indian state board / PUC style) uploaded by a teacher. Extract its structure exactly as printed.

@@ -9,8 +9,12 @@ import {
   stripSectionPrefix,
   verifyQuestions,
 } from "@/lib/ai/generate";
-import { generateQuestionImage, uploadQuestionImage } from "@/lib/ai/images";
-import { MAX_FIGURE_QUESTIONS } from "@/lib/constants";
+import {
+  figureContextFor,
+  figureReviewNotes,
+  remainingFigureBudget,
+  renderFigureImage,
+} from "@/lib/ai/figure-budget";
 import type { Paper, Question } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -68,6 +72,10 @@ export async function POST(
       styleNotes: paper.settings.style_notes ?? null,
       provider,
       figures: images.raster !== "off",
+      // Lets a batch generated later — typically the last strand in a
+      // combined subject's part order — see what earlier batches already
+      // used instead of guessing blind every time.
+      figureContext: figureContextFor(existing, paper.settings.blueprint?.sections ?? []),
     });
     await logUsage({ user_id: user.id, action: "generate_batch", usage: gen.usage });
 
@@ -94,8 +102,7 @@ export async function POST(
      * figure_specs, in order. "fixed" mode is already bounded by the slot plan,
      * but the same cap applies harmlessly.
      */
-    const usedFigures = existing.filter((q) => q.figure?.image_url).length;
-    let figureBudget = Math.max(0, MAX_FIGURE_QUESTIONS - usedFigures);
+    let figureBudget = remainingFigureBudget(existing);
     /** Spec to render for each question, or null to keep it text-only. */
     const figureToRender = shuffled.map((raw) => {
       if (!raw.figure_spec || images.raster === "off") return null;
@@ -122,44 +129,16 @@ export async function POST(
          * keeps its text either way; only whether it carries an image
          * differs, and needs_review explains which happened.
          */
-        let imageUrl: string | undefined;
-        let imageFailed = false;
         const figureSpec = figureToRender[i];
-        if (figureSpec) {
-          try {
-            const rendered = await generateQuestionImage({
+        const { imageUrl, imageFailed } = figureSpec
+          ? await renderFigureImage({
+              userId: user.id,
+              paperId: id,
+              questionId,
               spec: figureSpec,
               raster: images.raster,
-            });
-            if (rendered) {
-              imageUrl =
-                (await uploadQuestionImage({
-                  userId: user.id,
-                  paperId: id,
-                  questionId,
-                  bytes: rendered.bytes,
-                  mimeType: rendered.mimeType,
-                })) ?? undefined;
-              await logUsage({
-                user_id: user.id,
-                action: "generate_image",
-                usage: rendered.usage,
-                success: !!imageUrl,
-              });
-              if (!imageUrl) imageFailed = true;
-            } else {
-              imageFailed = true;
-            }
-          } catch (imgErr) {
-            imageFailed = true;
-            await logUsage({
-              user_id: user.id,
-              action: "generate_image",
-              success: false,
-              error_message: imgErr instanceof Error ? imgErr.message : "unknown",
-            });
-          }
-        }
+            })
+          : { imageUrl: undefined, imageFailed: false };
 
         /*
          * The verifier reads text only — it cannot tell whether a rendered
@@ -172,15 +151,11 @@ export async function POST(
           unresolved
             ? "The correct option could not be determined automatically — please select the right answer yourself."
             : null,
-          imageUrl
-            ? "This question has an AI-generated diagram. Check it is accurate and readable before distributing."
-            : null,
-          imageFailed
-            ? "A diagram was requested for this question but could not be generated — it was kept as text-only."
-            : null,
-          figureCapped[i]
-            ? `This question suited a diagram, but the paper had already used its limit of ${MAX_FIGURE_QUESTIONS} generated images, so it was kept as text-only. Check it still reads clearly without one.`
-            : null,
+          ...figureReviewNotes({
+            hasImage: !!imageUrl,
+            imageFailed,
+            capped: figureCapped[i],
+          }),
         ].filter(Boolean);
 
         return {
@@ -197,9 +172,12 @@ export async function POST(
           negative_marks: paper.settings.negative_marks,
           section_id: slot?.section_id,
           section_name: slot?.section_name,
-          figure: imageUrl
-            ? { image_url: imageUrl, caption: raw.figure_spec?.slice(0, 150) }
-            : undefined,
+          // No caption: figure_spec is the drawing instructions handed to the
+          // image model ("A circuit with a 6V battery..."), not something a
+          // student should read under the printed diagram. Karnataka's own
+          // model papers don't caption inline figures beyond what the
+          // question text already says.
+          figure: imageUrl ? { image_url: imageUrl } : undefined,
           needs_review:
             !verdict || !verdict.ok || unresolved || !!imageUrl || imageFailed || figureCapped[i],
           review_reason: reasons.length > 0 ? reasons.join(" ") : undefined,

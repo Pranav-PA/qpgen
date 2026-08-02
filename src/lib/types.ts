@@ -395,7 +395,12 @@ export interface UsageLog {
     | "regenerate_question"
     | "verify_batch"
     | "analyze_reference"
-    | "export";
+    | "export"
+    // Pre-existing gap: logUsage() in lib/api.ts has allowed "generate_image"
+    // since figure generation shipped, but this reading-side type never
+    // followed — fixed here alongside adding edit_question.
+    | "generate_image"
+    | "edit_question";
   model: string | null;
   input_tokens: number;
   output_tokens: number;

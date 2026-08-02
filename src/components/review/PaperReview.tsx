@@ -579,6 +579,15 @@ function QuestionCard({
   const [reportReason, setReportReason] = useState("");
   const [reportState, setReportState] = useState<"idle" | "busy" | "done" | "error">("idle");
   const [error, setError] = useState("");
+  /**
+   * "edit" keeps this question and changes only what the note implies; "guided"
+   * discards it for a brand new one steered by the note. Two different
+   * operations sharing one small panel — see applyAi() for the endpoints.
+   */
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiMode, setAiMode] = useState<"edit" | "guided">("edit");
+  const [aiInstruction, setAiInstruction] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
 
   const isMcqLike = hasOptions(q.type);
 
@@ -610,6 +619,44 @@ function QuestionCard({
       setError(err instanceof Error ? err.message : "Regeneration failed.");
     } finally {
       setRegenerating(false);
+    }
+  }
+
+  /**
+   * "edit" keeps most of the question and applies a targeted fix; "guided"
+   * is a full regenerate steered by the same note. Genuinely different
+   * operations (see the mode picker's copy below), so they hit different
+   * endpoints rather than one call with a flag that changes its meaning.
+   */
+  async function applyAi() {
+    const instruction = aiInstruction.trim();
+    if (!instruction) return;
+    setAiBusy(true);
+    setError("");
+    try {
+      const res = await fetch(
+        aiMode === "edit"
+          ? `/api/papers/${paperId}/edit-question`
+          : `/api/papers/${paperId}/regenerate-question`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            aiMode === "edit"
+              ? { question_id: q.id, instruction }
+              : { question_id: q.id, mode: "guided", instruction }
+          ),
+        }
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "That didn't work.");
+      onReplaced(body.question as Question);
+      setAiPanelOpen(false);
+      setAiInstruction("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That didn't work.");
+    } finally {
+      setAiBusy(false);
     }
   }
 
@@ -700,6 +747,17 @@ function QuestionCard({
               {regenerating ? "Regenerating…" : "Regenerate"}
             </button>
           )}
+          {!q.teacher_authored && (
+            <button
+              className="btn-secondary text-xs px-2.5 py-1"
+              aria-pressed={aiPanelOpen}
+              onClick={() => setAiPanelOpen(!aiPanelOpen)}
+              title="Describe a fix in plain English, or regenerate with your own steering"
+            >
+              <Icon name="sparkles" className="size-3.5" />
+              Ask AI…
+            </button>
+          )}
           <button
             className="btn-danger text-xs px-2.5 py-1"
             onClick={onDelete}
@@ -710,6 +768,64 @@ function QuestionCard({
           </button>
         </div>
       </div>
+
+      {aiPanelOpen && (
+        <div className="border border-line rounded-lg p-3 mb-3 space-y-2 bg-background">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="What should AI do">
+            <button
+              type="button"
+              aria-pressed={aiMode === "edit"}
+              className={aiMode === "edit" ? "btn-primary text-xs px-2.5 py-1" : "btn-secondary text-xs px-2.5 py-1"}
+              onClick={() => setAiMode("edit")}
+            >
+              Fix this question
+            </button>
+            <button
+              type="button"
+              aria-pressed={aiMode === "guided"}
+              className={aiMode === "guided" ? "btn-primary text-xs px-2.5 py-1" : "btn-secondary text-xs px-2.5 py-1"}
+              onClick={() => setAiMode("guided")}
+            >
+              Regenerate with instructions
+            </button>
+          </div>
+          <p className="help">
+            {aiMode === "edit"
+              ? "Keeps this question and applies only the change you describe — everything else stays as it is. Works on the diagram too."
+              : "Writes a brand new question in the same slot, steered by what you type below — discards the current one, unlike a fix."}
+          </p>
+          <textarea
+            rows={2}
+            className="input font-mono text-xs"
+            placeholder={
+              aiMode === "edit"
+                ? 'e.g. "the circuit is wrong, remove the resistance values from the image"'
+                : 'e.g. "make this about Ohm\'s law instead, with a short numerical"'
+            }
+            value={aiInstruction}
+            onChange={(e) => setAiInstruction(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <button
+              className="btn-primary text-xs px-2.5 py-1"
+              onClick={applyAi}
+              disabled={aiBusy || !aiInstruction.trim()}
+            >
+              {aiBusy ? "Working…" : "Apply"}
+            </button>
+            <button
+              className="btn-secondary text-xs px-2.5 py-1"
+              onClick={() => {
+                setAiPanelOpen(false);
+                setError("");
+              }}
+              disabled={aiBusy}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {q.needs_review && q.review_reason && (
         <p className="text-xs text-warn bg-warn-soft border border-warn/30 rounded-lg px-3 py-2 mb-3">
@@ -734,6 +850,19 @@ function QuestionCard({
               onChange={(e) => onChange({ ...q, question_text: e.target.value })}
             />
           </div>
+          {q.figure && (
+            <div className="flex items-center gap-3">
+              <QuestionFigure figure={q.figure} />
+              <button
+                type="button"
+                className="btn-secondary text-xs px-2.5 py-1 shrink-0"
+                onClick={() => onChange({ ...q, figure: undefined })}
+              >
+                <Icon name="trash" className="size-3.5" />
+                Remove diagram
+              </button>
+            </div>
+          )}
           {isMcqLike &&
             (q.options ?? []).map((opt, oi) => (
               <div key={oi} className="flex items-center gap-2">

@@ -75,6 +75,24 @@ export function drawableFigures(subject: CurriculumSubject): string[] {
   );
 }
 
+/**
+ * Diagram-worthy topics grouped by strand, drawn from the syllabus's own
+ * drawable_figures list. Not a restriction — a diagram the student is SHOWN
+ * (as opposed to one asked for by name) is unrestricted — this exists purely
+ * to give the generator concrete, syllabus-correct examples per branch instead
+ * of generic ones that happen to skew towards Physics.
+ */
+export function diagramTopicsByStrand(
+  subject: CurriculumSubject
+): Partial<Record<Strand, string[]>> {
+  const out: Partial<Record<Strand, string[]>> = {};
+  for (const c of examinableChapters(subject)) {
+    if (!c.strand || !c.drawable_figures || c.drawable_figures.length === 0) continue;
+    (out[c.strand] ??= []).push(...c.drawable_figures);
+  }
+  return out;
+}
+
 /** Chapters of one strand, in printed order. */
 export function chaptersInStrand(
   subject: CurriculumSubject,
