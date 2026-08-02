@@ -108,7 +108,14 @@ export async function getImageConfig(): Promise<ImageConfig> {
 
 export async function logUsage(entry: {
   user_id: string;
-  action: "generate_batch" | "regenerate_question" | "verify_batch" | "analyze_reference" | "export" | "generate_image";
+  action:
+    | "generate_batch"
+    | "regenerate_question"
+    | "verify_batch"
+    | "analyze_reference"
+    | "export"
+    | "generate_image"
+    | "edit_question";
   usage?: Usage;
   success?: boolean;
   error_message?: string;
