@@ -51,11 +51,25 @@ interface RunSpec {
   mcq?: boolean;
 }
 
-/** Roman numerals label the runs continuously across all three parts (I–XVI). */
-const ROMAN = [
-  "I", "II", "III", "IV", "V", "VI", "VII", "VIII",
-  "IX", "X", "XI", "XII", "XIII", "XIV", "XV", "XVI",
+/**
+ * Roman numerals label the runs continuously across all parts — SSLC Science
+ * runs I–XVI. Generated rather than tabulated: a strand-split school default
+ * can reach three parts of six runs, which a 16-entry table would overrun.
+ */
+const ROMAN_UNITS: [number, string][] = [
+  [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"],
 ];
+function roman(n: number): string {
+  let rest = n;
+  let out = "";
+  for (const [value, sym] of ROMAN_UNITS) {
+    while (rest >= value) {
+      out += sym;
+      rest -= value;
+    }
+  }
+  return out;
+}
 
 const PHYSICS_RUNS: RunSpec[] = [
   { label: "Multiple choice", count: 2, marks: 1, type: "mcq", mcq: true },
@@ -89,7 +103,7 @@ const SCIENCE_PARTS: { id: string; name: string; strand: Strand; runs: RunSpec[]
 ];
 
 function buildSslcScience(): Blueprint {
-  let roman = 0;
+  let runIndex = 0;
   const sections: BlueprintSection[] = SCIENCE_PARTS.map((part) => {
     const count = part.runs.reduce((t, r) => t + r.count, 0);
     return {
@@ -102,8 +116,8 @@ function buildSslcScience(): Blueprint {
       question_type: "short_answer" as const,
       strand: part.strand,
       subgroups: part.runs.map((r) => ({
-        id: `${part.id}_${roman}`,
-        label: `${ROMAN[roman++]}. ${r.mcq ? MCQ_INSTRUCTION : ANSWER_INSTRUCTION}`,
+        id: `${part.id}_${runIndex}`,
+        label: `${roman(++runIndex)}. ${r.mcq ? MCQ_INSTRUCTION : ANSWER_INSTRUCTION}`,
         question_type: r.type,
         count: r.count,
         marks_per_question: r.marks,
@@ -237,7 +251,7 @@ function buildSchoolDefault(subjectKey: string): () => Blueprint {
           question_type: "short_answer",
           subgroups: SCHOOL_RUNS.map((r, i) => ({
             id: `part_a_${i}`,
-            label: `${ROMAN[i]}. ${r.mcq ? MCQ_INSTRUCTION : ANSWER_INSTRUCTION}`,
+            label: `${roman(i + 1)}. ${r.mcq ? MCQ_INSTRUCTION : ANSWER_INSTRUCTION}`,
             question_type: r.type,
             count: r.count,
             marks_per_question: r.marks,
@@ -270,7 +284,7 @@ function buildSchoolDefault(subjectKey: string): () => Blueprint {
       });
     }
 
-    let roman = 0;
+    let runIndex = 0;
     const sections: BlueprintSection[] = strands.map((strand, i) => {
       const runs = perStrandRuns[i];
       const count = runs.reduce((t, r) => t + r.count, 0);
@@ -285,7 +299,7 @@ function buildSchoolDefault(subjectKey: string): () => Blueprint {
         strand,
         subgroups: runs.map((r, k) => ({
           id: `${id}_${k}`,
-          label: `${ROMAN[roman++]}. ${r.mcq ? MCQ_INSTRUCTION : ANSWER_INSTRUCTION}`,
+          label: `${roman(++runIndex)}. ${r.mcq ? MCQ_INSTRUCTION : ANSWER_INSTRUCTION}`,
           question_type: r.type,
           count: r.count,
           marks_per_question: r.marks,
