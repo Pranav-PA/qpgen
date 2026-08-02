@@ -37,10 +37,9 @@ export function subHeadingFor(
     // A run with its own mark value prints its own "N × M = T" the way
     // Karnataka does, rather than one instruction for the whole part.
     marks:
-      sub.instruction?.trim() ||
-      (sub.marks_per_question !== undefined
+      sub.marks_per_question !== undefined
         ? defaultSubGroupInstruction(section, sub)
-        : ""),
+        : "",
   };
 }
 

@@ -66,11 +66,14 @@ export const blueprintSchema = z.object({
           .array(
             z.object({
               id: z.string().trim().min(1).max(20),
-              label: z.string().trim().min(1).max(80),
+              // A run's heading IS its instruction on a Karnataka paper — "Four
+              // alternatives are given for each of the following questions…"
+              // runs to ~160 characters. Bounded like a section instruction,
+              // not like a short label.
+              label: z.string().trim().min(1).max(300),
               question_type: questionTypeSchema,
               count: z.number().int().min(1).max(MAX_QUESTIONS_BLUEPRINT),
               marks_per_question: z.number().min(0.5).max(50).optional(),
-              instruction: z.string().max(300).optional(),
             })
           )
           // KSEEB's SSLC Science PART-C prints six runs (groups XI–XVI).

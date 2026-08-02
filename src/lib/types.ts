@@ -101,10 +101,11 @@ export interface BlueprintSubGroup {
    * Overrides the part's mark value for this run. Karnataka's SSLC Science
    * paper needs it: PART-A (Physics) runs groups worth 1, 1, 2, 3 and 4 marks
    * under a single heading, so marks cannot live only on the part.
+   *
+   * When set, the run prints its own "N × M = T" total against the right
+   * margin — there is no separate field for that text, it is always derived.
    */
   marks_per_question?: number;
-  /** Printed above this run; auto-worded from count × marks when left blank. */
-  instruction?: string;
 }
 
 /** One part of a blueprint paper, e.g. "PART-B, 2 marks, answer any 5 of 8". */
