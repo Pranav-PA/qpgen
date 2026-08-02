@@ -1,6 +1,7 @@
 import { GENERATION_BATCH_SIZE } from "@/lib/constants";
-import { sectionSlotTypes } from "@/lib/types";
+import { sectionSlotMarks, sectionSlotTypes, subGroupAt } from "@/lib/types";
 import type {
+  BlueprintSection,
   Difficulty,
   DifficultySettings,
   PaperSettings,
@@ -8,6 +9,10 @@ import type {
   QuestionType,
 } from "@/lib/types";
 import type { BatchSlot } from "./generate";
+
+function subGroupLabelAt(s: BlueprintSection, offset: number): string | undefined {
+  return subGroupAt(s, offset)?.label;
+}
 
 /**
  * Deterministic slot plan for the whole paper, derived from settings alone.
@@ -24,20 +29,24 @@ function blueprintPlan(settings: PaperSettings): BatchSlot[] {
   const slots: BatchSlot[] = [];
 
   for (const section of bp.sections) {
-    // Sub-groups fix the type of each printed slot in order (e.g. PART-A's
-    // first 15 are MCQs, the next 5 fill-in-the-blanks).
+    // Sub-groups fix the type and mark value of each printed slot in order
+    // (e.g. SSLC PART-A runs 2 MCQs, 2 one-markers, then 2-, 3- and 4-markers).
     const slotTypes = sectionSlotTypes(section);
+    const slotMarks = sectionSlotMarks(section);
     const sectionSlots: BatchSlot[] = [];
     for (const row of bp.rows) {
       const count = row.counts[section.id] ?? 0;
       for (let i = 0; i < count; i++) {
+        const at = sectionSlots.length;
         sectionSlots.push({
-          type: slotTypes[sectionSlots.length] ?? section.question_type,
+          type: slotTypes[at] ?? section.question_type,
           difficulty: "medium",
           chapter: row.chapter,
           section_id: section.id,
           section_name: section.name,
-          marks: section.marks_per_question,
+          marks: slotMarks[at] ?? section.marks_per_question,
+          strand: section.strand,
+          subgroup_label: subGroupLabelAt(section, at),
         });
       }
     }
@@ -94,9 +103,21 @@ function distributeFigureSlots(slots: BatchSlot[], count: number): BatchSlot[] {
   return slots.map((s, i) => (marked.has(i) ? { ...s, wants_figure: true } : s));
 }
 
+/**
+ * In "auto" mode no slot is pre-marked: the model is asked to write a
+ * figure_spec wherever a question genuinely needs a diagram, and the per-paper
+ * ceiling is enforced server-side instead. Marking slots up front is the wrong
+ * shape for a combined-subject paper — it would spread images evenly across
+ * Physics, Chemistry and Biology regardless of which questions need one.
+ */
+function applyFigurePolicy(slots: BatchSlot[], settings: PaperSettings): BatchSlot[] {
+  if (settings.figure_mode === "auto") return slots;
+  return distributeFigureSlots(slots, settings.figure_questions ?? 0);
+}
+
 export function fullPlan(settings: PaperSettings): BatchSlot[] {
   if (settings.mode === "blueprint" && settings.blueprint) {
-    return distributeFigureSlots(blueprintPlan(settings), settings.figure_questions ?? 0);
+    return applyFigurePolicy(blueprintPlan(settings), settings);
   }
 
   const n = settings.question_count;
@@ -133,9 +154,9 @@ export function fullPlan(settings: PaperSettings): BatchSlot[] {
       ? difficulties.map((_, i) => (["mcq", "mcq", "numerical", "assertion_reason"] as QuestionType[])[i % 4])
       : difficulties.map(() => settings.question_type as QuestionType);
 
-  return distributeFigureSlots(
+  return applyFigurePolicy(
     difficulties.map((difficulty, i) => ({ difficulty, type: types[i] })),
-    settings.figure_questions ?? 0
+    settings
   );
 }
 

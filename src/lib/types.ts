@@ -1,6 +1,8 @@
 // Shared domain types. The `questions` JSONB column in `papers` stores Question[].
 // All question/solution text may contain inline LaTeX delimited by $...$.
 
+import type { CurriculumRef, Strand } from "./curriculum/types";
+
 export type ExamType = "JEE" | "NEET" | "Board" | "Custom";
 
 /**
@@ -95,12 +97,21 @@ export interface BlueprintSubGroup {
   label: string;
   question_type: QuestionType;
   count: number;
+  /**
+   * Overrides the part's mark value for this run. Karnataka's SSLC Science
+   * paper needs it: PART-A (Physics) runs groups worth 1, 1, 2, 3 and 4 marks
+   * under a single heading, so marks cannot live only on the part.
+   */
+  marks_per_question?: number;
+  /** Printed above this run; auto-worded from count × marks when left blank. */
+  instruction?: string;
 }
 
 /** One part of a blueprint paper, e.g. "PART-B, 2 marks, answer any 5 of 8". */
 export interface BlueprintSection {
   id: string;
   name: string;
+  /** Fallback for slots whose sub-group does not set its own mark value. */
   marks_per_question: number;
   questions_to_set: number;
   questions_to_answer: number;
@@ -109,6 +120,11 @@ export interface BlueprintSection {
   instruction?: string;
   /** When present, splits the part into labelled runs of different types. */
   subgroups?: BlueprintSubGroup[];
+  /**
+   * Branch of a combined subject this part covers ("physics" for SSLC PART-A).
+   * Keeps a Chemistry chapter from being asked under the Physics heading.
+   */
+  strand?: Strand;
 }
 
 /** Question types for each printed slot of a part, honouring any sub-groups. */
@@ -124,6 +140,55 @@ export function sectionSlotTypes(s: BlueprintSection): QuestionType[] {
   // Pad or trim if the sub-group counts drift from the part's total.
   while (out.length < s.questions_to_set) out.push(s.question_type);
   return out.slice(0, s.questions_to_set);
+}
+
+/** Mark value of each printed slot of a part, honouring any sub-groups. */
+export function sectionSlotMarks(s: BlueprintSection): number[] {
+  const groups = s.subgroups ?? [];
+  if (groups.length === 0) {
+    return Array<number>(s.questions_to_set).fill(s.marks_per_question);
+  }
+  const out: number[] = [];
+  for (const g of groups) {
+    const marks = g.marks_per_question ?? s.marks_per_question;
+    for (let i = 0; i < g.count; i++) out.push(marks);
+  }
+  while (out.length < s.questions_to_set) out.push(s.marks_per_question);
+  return out.slice(0, s.questions_to_set);
+}
+
+/**
+ * Marks a student can score from one part.
+ *
+ * When a choice is offered ("answer any 5 of 8") and the slots carry different
+ * mark values, which 5 the student picks is up to them, so there is no single
+ * right total. Sum the first N in printed order — the two features do not
+ * co-occur in any paper we support, since Karnataka's SSLC uses per-question
+ * "OR" alternatives rather than answer-any-N.
+ */
+export function sectionAnswerableMarks(s: BlueprintSection): number {
+  const marks = sectionSlotMarks(s);
+  const answer = Math.min(s.questions_to_answer, marks.length);
+  return marks.slice(0, answer).reduce((sum, m) => sum + m, 0);
+}
+
+/** True when the part's runs carry differing mark values. */
+export function hasPerGroupMarks(s: BlueprintSection): boolean {
+  const groups = s.subgroups ?? [];
+  return groups.some((g) => g.marks_per_question !== undefined);
+}
+
+/** The sub-group the nth (0-based) question of a part falls inside. */
+export function subGroupAt(
+  s: BlueprintSection,
+  offset: number
+): BlueprintSubGroup | null {
+  let at = 0;
+  for (const g of s.subgroups ?? []) {
+    if (offset < at + g.count) return g;
+    at += g.count;
+  }
+  return null;
 }
 
 /** Sub-group label for the nth (0-based) question of a part, if it starts one. */
@@ -156,12 +221,9 @@ export interface Blueprint {
   rows: BlueprintRow[];
 }
 
-/** Marks a student can actually score (choice-aware). */
+/** Marks a student can actually score (choice- and sub-group-aware). */
 export function blueprintTotalMarks(bp: Blueprint): number {
-  return bp.sections.reduce(
-    (sum, s) => sum + s.questions_to_answer * s.marks_per_question,
-    0
-  );
+  return bp.sections.reduce((sum, s) => sum + sectionAnswerableMarks(s), 0);
 }
 
 /** Questions actually printed on the paper. */
@@ -181,6 +243,10 @@ const WORDS = [
 const spell = (n: number) => WORDS[n] ?? String(n);
 
 export function defaultSectionInstruction(s: BlueprintSection): string {
+  // A part whose runs carry their own mark values has no single instruction —
+  // each run prints its own (see defaultSubGroupInstruction).
+  if (hasPerGroupMarks(s)) return "";
+
   const set = s.questions_to_set;
   const answer = Math.min(s.questions_to_answer, set);
   const total = answer * s.marks_per_question;
@@ -192,6 +258,18 @@ export function defaultSectionInstruction(s: BlueprintSection): string {
       : `Answer all ${spell(set)} questions. (${sum})`;
   }
   return `Answer any ${spell(answer)} of the following ${spell(set)} questions. (${sum})`;
+}
+
+/**
+ * Instruction printed above one run, worded the way Karnataka prints it:
+ * "Answer the following questions: 3 × 2 = 6".
+ */
+export function defaultSubGroupInstruction(
+  s: BlueprintSection,
+  g: BlueprintSubGroup
+): string {
+  const marks = g.marks_per_question ?? s.marks_per_question;
+  return `${g.count} × ${marks} = ${g.count * marks}`;
 }
 
 export interface DifficultySettings {
@@ -235,9 +313,26 @@ export interface PaperSettings {
    * Count of questions that must carry an AI-generated diagram. Opt-in and
    * mandatory once checked (see the wizard) — unlike SVG figures, each of
    * these is a real per-image bill, so the count is a hard ceiling on cost,
-   * not a hint to the model.
+   * not a hint to the model. Ignored when figure_mode is "auto".
    */
   figure_questions?: number;
+  /**
+   * How diagram slots are chosen. "fixed" (the default, and what every paper
+   * created before this existed does) honours figure_questions exactly.
+   *
+   * "auto" lets the model decide which questions warrant a diagram and how
+   * many. A fixed count is the wrong control for a combined-subject paper —
+   * Physics, Chemistry and Biology each need their own share, and whether a
+   * question needs a figure is a property of the question, not a quota. Cost is
+   * still bounded: MAX_FIGURE_QUESTIONS is enforced server-side per paper.
+   */
+  figure_mode?: "fixed" | "auto";
+  /**
+   * Board/class/subject this paper was built against, when the teacher picked
+   * one instead of typing a subject freehand. Drives the chapter list, the
+   * blueprint preset and the syllabus grounding in the prompts.
+   */
+  curriculum?: CurriculumRef;
   /** Absent on papers created before blueprint mode existed — treat as "simple". */
   mode?: "simple" | "blueprint";
   blueprint?: Blueprint;

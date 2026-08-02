@@ -27,6 +27,29 @@ export const questionTypeSchema = z.enum([
   "long_answer",
 ]);
 
+export const strandSchema = z.enum([
+  "physics",
+  "chemistry",
+  "biology",
+  "history",
+  "political_science",
+  "sociology",
+  "geography",
+  "economics",
+  "business_studies",
+]);
+
+/**
+ * Reference to the built-in curriculum data. Validated loosely on purpose —
+ * an unknown subject_key resolves to null at lookup and the paper falls back to
+ * free-text behaviour, rather than rejecting a paper whose key we later rename.
+ */
+export const curriculumSchema = z.object({
+  board: z.literal("KSEEB"),
+  class_level: z.union([z.literal(8), z.literal(9), z.literal(10)]),
+  subject_key: z.string().trim().min(1).max(60),
+});
+
 export const blueprintSchema = z.object({
   sections: z
     .array(
@@ -38,6 +61,7 @@ export const blueprintSchema = z.object({
         questions_to_answer: z.number().int().min(1).max(MAX_QUESTIONS_BLUEPRINT),
         question_type: questionTypeSchema,
         instruction: z.string().max(300).optional(),
+        strand: strandSchema.optional(),
         subgroups: z
           .array(
             z.object({
@@ -45,9 +69,12 @@ export const blueprintSchema = z.object({
               label: z.string().trim().min(1).max(80),
               question_type: questionTypeSchema,
               count: z.number().int().min(1).max(MAX_QUESTIONS_BLUEPRINT),
+              marks_per_question: z.number().min(0.5).max(50).optional(),
+              instruction: z.string().max(300).optional(),
             })
           )
-          .max(4)
+          // KSEEB's SSLC Science PART-C prints six runs (groups XI–XVI).
+          .max(8)
           .optional(),
       })
     )
@@ -91,6 +118,8 @@ export const paperSettingsSchema = z
     extra_instructions: z.string().trim().max(1000).optional(),
     /** Count of questions that must carry an AI-generated diagram. Opt-in; 0/undefined means none. */
     figure_questions: z.number().int().min(0).max(MAX_FIGURE_QUESTIONS).optional(),
+    figure_mode: z.enum(["fixed", "auto"]).optional(),
+    curriculum: curriculumSchema.optional(),
     layout_columns: z.union([z.literal(1), z.literal(2)]).optional(),
   })
   .refine((s) => s.mode !== "blueprint" || !!s.blueprint, {

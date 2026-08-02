@@ -10,6 +10,7 @@ import { groupBySection, type SectionGroup } from "@/lib/sections";
 import {
   QUESTION_TYPE_LABELS,
   hasOptions,
+  subGroupAt,
   type BlueprintSection,
   type Paper,
   type Question,
@@ -205,20 +206,30 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
 
   function addCustomQuestion(section: BlueprintSection | null) {
     const id = crypto.randomUUID();
+    // The new question lands at the end of its part, so it inherits the terms
+    // of the run that slot falls in — a part whose runs differ in mark value
+    // (Karnataka's SSLC parts do) has no single answer at the part level.
+    const offset = section
+      ? questions.filter((q) => q.section_id === section.id).length
+      : 0;
+    const run = section ? subGroupAt(section, offset) : null;
     mutate([
       ...questions,
       {
         id,
         // A blueprint part dictates the type and mark value of everything in
         // it, so a hand-written question joins on the part's terms.
-        type: section?.question_type ?? "mcq",
+        type: run?.question_type ?? section?.question_type ?? "mcq",
         difficulty: "medium",
         chapter: paper.settings.chapters[0] ?? "",
         question_text: "",
         options: ["", "", "", ""],
         correct_answer: "A",
         solution: "",
-        marks: section?.marks_per_question ?? paper.settings.marks_per_question,
+        marks:
+          run?.marks_per_question ??
+          section?.marks_per_question ??
+          paper.settings.marks_per_question,
         negative_marks: section ? 0 : paper.settings.negative_marks,
         needs_review: false,
         teacher_authored: true,

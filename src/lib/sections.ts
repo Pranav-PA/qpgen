@@ -1,5 +1,6 @@
 import {
   defaultSectionInstruction,
+  defaultSubGroupInstruction,
   subGroupStartingAt,
   type BlueprintSection,
   type Paper,
@@ -16,14 +17,31 @@ export interface SectionGroup {
   startIndex: number;
 }
 
-/** Sub-group label to print before the question at this offset, if any. */
+/** Heading printed before the question at this offset, when a run starts there. */
+export interface SubHeading {
+  label: string;
+  /** Right-margin total, e.g. "3 × 2 = 6". Empty when the run sets no marks. */
+  marks: string;
+}
+
 export function subHeadingFor(
   group: SectionGroup,
   offsetInGroup: number
-): string | null {
-  if (!group.section) return null;
-  const sub = subGroupStartingAt(group.section, offsetInGroup);
-  return sub && (group.section.subgroups?.length ?? 0) > 1 ? sub.label : null;
+): SubHeading | null {
+  const section = group.section;
+  if (!section) return null;
+  const sub = subGroupStartingAt(section, offsetInGroup);
+  if (!sub || (section.subgroups?.length ?? 0) < 1) return null;
+  return {
+    label: sub.label,
+    // A run with its own mark value prints its own "N × M = T" the way
+    // Karnataka does, rather than one instruction for the whole part.
+    marks:
+      sub.instruction?.trim() ||
+      (sub.marks_per_question !== undefined
+        ? defaultSubGroupInstruction(section, sub)
+        : ""),
+  };
 }
 
 /**
@@ -58,7 +76,8 @@ export function groupBySection(paper: Paper): SectionGroup[] {
     groups.push({
       section,
       heading: section.name,
-      instruction: section.instruction?.trim() || defaultSectionInstruction(section),
+      instruction:
+        section.instruction?.trim() || defaultSectionInstruction(section) || null,
       questions: inSection,
       startIndex: running,
     });

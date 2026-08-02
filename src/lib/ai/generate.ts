@@ -6,6 +6,7 @@ import type {
   QuestionType,
   ReferencePage,
 } from "@/lib/types";
+import { STRAND_LABELS, type Strand } from "@/lib/curriculum";
 import { repairMisescapedLatex } from "@/lib/text-repair";
 import { runAi, type ProviderName, type Usage } from "./providers";
 import {
@@ -25,6 +26,10 @@ export interface BatchSlot {
   section_id?: string;
   section_name?: string;
   marks?: number;
+  /** Branch of a combined subject this slot's part covers, e.g. "physics". */
+  strand?: Strand;
+  /** Label of the run inside the part, e.g. "Multiple choice questions". */
+  subgroup_label?: string;
   /** Set by fullPlan() from settings.figure_questions — this slot's question must carry a diagram. */
   wants_figure?: boolean;
 }
@@ -160,15 +165,44 @@ function teacherInstructionBlock(instructions: string): string {
  * because responseSchema (strict JSON, used here) and image output are
  * mutually exclusive within a single Gemini request.
  */
+const FIGURE_SPEC_RULES = [
+  "write a complete plain-text description in figure_spec: every component,",
+  "every value, every label, and how they are spatially arranged or connected.",
+  "Someone who cannot see the question must be able to draw it correctly from",
+  'figure_spec alone — do not write "a diagram of X", describe X. figure_spec',
+  "is prose, never markup or code.",
+].join("\n");
+
 const FIGURE_INSTRUCTIONS = [
   "\nSome questions are marked below as needing a diagram — a circuit, a ray",
   "diagram, an apparatus setup, a labelled biological or geometric figure.",
-  "For exactly those questions, write a complete plain-text description in",
-  "figure_spec: every component, every value, every label, and how they are",
-  "spatially arranged or connected. Someone who cannot see the question must",
-  "be able to draw it correctly from figure_spec alone — do not write \"a",
-  "diagram of X\", describe X. figure_spec is prose, never markup or code.",
+  `For exactly those questions, ${FIGURE_SPEC_RULES}`,
   "Set figure_spec to null on every other question.",
+].join("\n");
+
+/**
+ * Used when the teacher asked for diagrams without naming a count. The model
+ * chooses which questions get one, so the guidance has to be about when a
+ * figure is genuinely load-bearing — otherwise it decorates recall questions
+ * and every image is a real per-image bill. A per-paper ceiling is enforced
+ * server-side regardless of what comes back.
+ */
+const FIGURE_AUTO_INSTRUCTIONS = [
+  "\nDiagrams are enabled for this paper. Decide for yourself which of the",
+  "questions below need one: write figure_spec ONLY where a student genuinely",
+  "cannot answer the question without seeing a figure, and null everywhere else.",
+  "",
+  "A diagram is warranted for ray diagrams and image formation, electric",
+  "circuits, magnetic field arrangements, apparatus and experiment setups,",
+  "labelled biological structures the question asks about, and geometric",
+  "constructions. It is NOT warranted for definitions, statements of a law,",
+  "differences between two things, straightforward numericals, or any question",
+  "answerable from the text alone — most questions need no figure at all.",
+  "",
+  "Do not add a figure just to spread them evenly, and do not draw a figure for",
+  "something the question asks the STUDENT to draw.",
+  "",
+  `Where a figure is warranted, ${FIGURE_SPEC_RULES}`,
 ].join("\n");
 
 export async function generateQuestions(opts: {
@@ -183,6 +217,7 @@ export async function generateQuestions(opts: {
   if (isMockAi()) return mockGenerate(opts.settings, opts.slots);
 
   const { settings, slots, avoid, styleNotes } = opts;
+  const autoFigures = opts.figures && settings.figure_mode === "auto";
   const anyFigureSlot = opts.figures && slots.some((s) => s.wants_figure);
   const composition = slots
     .map((s, i) => {
@@ -190,7 +225,13 @@ export async function generateQuestions(opts: {
       if (s.marks !== undefined) bits.push(`worth ${s.marks} mark(s)`);
       if (s.chapter) bits.push(`from the chapter "${s.chapter}"`);
       if (s.section_name) bits.push(`for ${s.section_name}`);
-      if (opts.figures && s.wants_figure) bits.push("needs a diagram — write figure_spec");
+      // The part heading names a branch of a combined subject; a question from
+      // the wrong branch under it is wrong however good the question is.
+      if (s.strand) bits.push(`which is the ${STRAND_LABELS[s.strand]} part`);
+      if (s.subgroup_label) bits.push(`under "${s.subgroup_label}"`);
+      if (!autoFigures && opts.figures && s.wants_figure) {
+        bits.push("needs a diagram — write figure_spec");
+      }
       return bits.join(", ");
     })
     .join("\n");
@@ -206,9 +247,11 @@ export async function generateQuestions(opts: {
     userParts.push(`\nStyle profile from the teacher's reference paper — imitate this style and difficulty, but never copy questions:\n${styleNotes}`);
   }
   userParts.push(
-    anyFigureSlot
-      ? FIGURE_INSTRUCTIONS
-      : '\nDo not produce diagrams. Set "figure_spec" to null on every question, and do not write questions that depend on seeing one.'
+    autoFigures
+      ? FIGURE_AUTO_INSTRUCTIONS
+      : anyFigureSlot
+        ? FIGURE_INSTRUCTIONS
+        : '\nDo not produce diagrams. Set "figure_spec" to null on every question, and do not write questions that depend on seeing one.'
   );
   if (settings.extra_instructions) {
     userParts.push(teacherInstructionBlock(settings.extra_instructions));
