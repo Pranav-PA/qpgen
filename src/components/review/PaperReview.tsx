@@ -38,6 +38,8 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
 
   const flagged = useMemo(() => questions.filter((q) => q.needs_review), [questions]);
   const remaining = paper.settings.question_count - questions.length;
+  const referenceBank =
+    paper.settings.source_mode === "reference" ? paper.reference_bank : null;
   const groups = useMemo(
     () => groupBySection({ ...paper, questions }),
     [paper, questions]
@@ -381,6 +383,27 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
         </div>
       )}
 
+      {/*
+        A reference-led paper's size is capped by what its PDF actually
+        contained, and the wizard lowers the requested count silently to match.
+        Saying so here is the only place a teacher who asked for 45 and got 39
+        finds out why.
+      */}
+      {referenceBank && (
+        <div className="card p-4 mb-4 text-sm border-accent/30">
+          <p>
+            Every question on this paper was drawn from your reference PDF —{" "}
+            {referenceBank.items.length} question
+            {referenceBank.items.length === 1 ? " was" : "s were"} read from{" "}
+            {referenceBank.pages_read} page
+            {referenceBank.pages_read === 1 ? "" : "s"}, and {questions.length} of
+            them {questions.length === 1 ? "is" : "are"} used here. Repeated
+            question types in the PDF were used once rather than several times
+            over.
+          </p>
+        </div>
+      )}
+
       {remaining > 0 && (
         <div className="card p-4 mb-4 flex flex-wrap items-center justify-between gap-4 border-accent/30">
           <p className="text-sm">
@@ -697,6 +720,19 @@ function QuestionCard({
         </span>
         {q.teacher_authored && (
           <span className="badge bg-accent-soft text-accent">Your question</span>
+        )}
+        {/*
+          Which question of the teacher's own PDF this came from. Worth the
+          space: checking a reference-led paper means checking it against the
+          source, and "Q37" is what lets them find it in seconds.
+        */}
+        {q.reference_label && (
+          <span
+            className="badge bg-background border border-line text-muted"
+            title="The question in your reference PDF this was drawn from"
+          >
+            From PDF Q{q.reference_label}
+          </span>
         )}
         {q.needs_review && (
           <span className="badge bg-warn-soft text-warn border border-warn/30">

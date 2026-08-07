@@ -6,7 +6,11 @@ import {
   MIN_QUESTIONS_PER_PAPER,
   MAX_REFERENCE_PDF_PAGES,
   MAX_FIGURE_QUESTIONS,
+  MAX_REFERENCE_ITEMS_PER_PAGE,
 } from "./constants";
+
+/** Upper bound on one bank: every page may print a full column of questions. */
+const MAX_REFERENCE_ITEMS = MAX_REFERENCE_PDF_PAGES * MAX_REFERENCE_ITEMS_PER_PAGE;
 
 export const difficultySchema = z
   .object({
@@ -99,10 +103,12 @@ export const paperSettingsSchema = z
     exam_type: z.enum(["JEE", "NEET", "Board", "Custom"]),
     exam_type_custom: z.string().trim().max(100).optional(),
     subject: z.string().trim().min(2).max(100),
-    chapters: z
-      .array(z.string().trim().min(2).max(200))
-      .min(1, "Add at least one chapter or topic.")
-      .max(40),
+    /**
+     * Empty is legal only for a reference-mode paper, which has no chapter
+     * list until extraction fills it with the bank's topics — enforced by the
+     * refinement below so ordinary papers keep their original message.
+     */
+    chapters: z.array(z.string().trim().min(2).max(200)).max(40),
     question_count: z
       .number()
       .int()
@@ -124,6 +130,12 @@ export const paperSettingsSchema = z
     figure_mode: z.enum(["fixed", "auto"]).optional(),
     curriculum: curriculumSchema.optional(),
     layout_columns: z.union([z.literal(1), z.literal(2)]).optional(),
+    source_mode: z.enum(["syllabus", "reference"]).optional(),
+    reference_fidelity: z.enum(["reuse", "variant"]).optional(),
+  })
+  .refine((s) => s.source_mode === "reference" || s.chapters.length > 0, {
+    message: "Add at least one chapter or topic.",
+    path: ["chapters"],
   })
   .refine((s) => s.mode !== "blueprint" || !!s.blueprint, {
     message: "Blueprint mode needs a blueprint.",
@@ -159,6 +171,24 @@ export const referencePagesSchema = z
     })
   )
   .max(MAX_REFERENCE_PDF_PAGES);
+
+/**
+ * Figure crops taken client-side out of the reference PDF and posted back for
+ * upload. Sized like a reference page rather than a logo: these are small
+ * regions of a page, but a dense circuit at print resolution is still tens of
+ * kilobytes, and a bank can carry a dozen of them.
+ */
+export const referenceCropsSchema = z
+  .array(
+    z.object({
+      item_id: z.string().trim().min(1).max(60),
+      data_url: z
+        .string()
+        .startsWith("data:image/", "Figure crops must be images.")
+        .max(1_000_000, "A cropped figure is too large."),
+    })
+  )
+  .max(MAX_REFERENCE_ITEMS);
 
 export const createPaperSchema = z.object({
   title: z.string().trim().min(2).max(200),

@@ -1,4 +1,4 @@
-import type { PaperSettings } from "@/lib/types";
+import { isReferenceLed, type PaperSettings } from "@/lib/types";
 import {
   classLabel,
   drawableFigures,
@@ -154,13 +154,29 @@ Variety:
 
 export function verifierSystemPrompt(settings: PaperSettings): string {
   const curriculum = curriculumRules(settings);
+  /*
+   * A reference-led paper is scoped by the teacher's own reference PDF, not by
+   * a syllabus. Left unchanged, the scope check fails perfectly good questions
+   * for sitting outside a board syllabus the paper was never written to — and
+   * a "reuse" paper's questions are transcriptions, where wording is the
+   * source's business and only correctness is the verifier's.
+   */
+  const reference = isReferenceLed(settings);
+  const scopeCheck = reference
+    ? `Check topic scope: does the question belong to the topic it claims? These questions were drawn from a reference paper the teacher uploaded, so judge them against that topic and against ${settings.subject} at ${examLabel(settings)} level — do NOT fail a question for sitting outside any particular board's syllabus, and do not fail it for phrasing or style.`
+    : `Check chapter scope: does the question belong strictly to the allowed chapter(s) at ${examLabel(settings)} level?${curriculum ? " For a Karnataka paper this means answerable from the KTBS textbook for that class — fail anything needing a later class's technique, and equally do not fail a question merely because current NCERT dropped its chapter." : ""}`;
+
   return `You are a meticulous senior ${settings.subject} examiner reviewing draft questions for a ${examLabel(settings)} paper before printing. You did NOT write these questions.
-${curriculum ? `\n${curriculum}\n` : ""}
+${curriculum && !reference ? `\n${curriculum}\n` : ""}${
+    reference
+      ? "\nThese questions were drawn from a reference paper the teacher uploaded — some are transcriptions of its questions, some are new variants of them. Either way a transcription can be damaged by OCR (a mangled exponent, an option that lost a minus sign, a value that makes the question unanswerable), so solve every one from scratch exactly as you would a freshly written question.\n"
+      : ""
+  }
 For EACH question, independently:
 
 1. Solve it yourself from scratch, without looking at the provided answer or solution first.
 2. Then compare: does your answer match the stated correct_answer?
-3. Check chapter scope: does the question belong strictly to the allowed chapter(s) at ${examLabel(settings)} level?${curriculum ? " For a Karnataka paper this means answerable from the KTBS textbook for that class — fail anything needing a later class's technique, and equally do not fail a question merely because current NCERT dropped its chapter." : ""}
+3. ${scopeCheck}
 4. Check exactly-one-correct: for MCQs, verify no other option is also defensible and the four options are distinct. For descriptive questions (one_word / short_answer / long_answer) there are no options — instead confirm the model answer is factually right, actually answers what was asked, and that the work demanded matches the marks stated.
 5. Check self-containment: a question is marked "has_figure: true" when a real diagram is generated and printed alongside it — that one may reference "the circuit/diagram/graph shown". Every question with "has_figure: false" must contain every value needed to solve it and must not reference any figure, diagram, graph, circuit, or table.
 6. Check the solution is internally consistent with stated_correct_answer_text: the worked solution must arrive at that same answer. Note that options get re-ordered after generation, so a solution naming an option letter is unreliable by construction — judge consistency by the answer's content/value, and fail the question if the solution's conclusion contradicts it.
@@ -221,6 +237,101 @@ Rules:
 - If a value is genuinely unreadable, make your best reading rather than inventing a new structure; the teacher will review the result.
 
 Return the parts in printed order and the chapters in printed order.`;
+
+/**
+ * Reads ONE page of a teacher's reference paper into structured questions.
+ *
+ * One page per call, not the whole PDF per call: a question bank page prints
+ * up to ~18 questions, so ten pages in one request is both an enormous strict
+ * -JSON output and markedly worse at staying aligned with what is actually on
+ * each page. Per-page calls also parallelise.
+ *
+ * `archetype` is the field the whole feature turns on. A chapterwise bank
+ * prints the same question shape three or four times over (three different
+ * "stretched wire" resistance problems in a row is normal), and a paper built
+ * by taking questions in printed order would reproduce every one of them. The
+ * selector groups by archetype and takes one per archetype per pass, so the
+ * model's job here is only to name the shape accurately and consistently.
+ */
+export const REFERENCE_EXTRACTION_PROMPT = `You are reading ONE page of an exam paper, question bank or textbook excerpt that a teacher uploaded as a reference. Transcribe every question printed on this page, exactly as printed.
+
+For each question:
+- question_text: the question a student reads, transcribed faithfully. Do NOT include the printed question number, the marks, the year/source tag in brackets at the end (e.g. "(NEET 2017)", "(1994)"), or the answer key. Repair obvious OCR damage — an ohm sign read as "W", a mu read as "m", a rho read as "r", broken fractions and split superscripts are all common. If a question is cut off at the page edge and you cannot read all of it, omit it entirely rather than guessing the missing half.
+- ref_label: the question number as printed (e.g. "37"), or "" if unnumbered.
+- topic: the sub-topic heading printed above the question (e.g. "Combination of Resistors — Series and Parallel"). Headings often appear only once and then govern the questions that follow, including onto later pages — if no heading is visible on this page, name the specific sub-topic the question belongs to yourself. Never answer with the chapter name alone.
+- archetype: a short lowercase phrase naming WHAT THE QUESTION DOES, not what it is about — "resistance of a wire stretched to n times its length", "power drawn by identical bulbs rewired series to parallel", "equivalent resistance between two points of a wire ring". Two questions that differ only in their numbers MUST get the same archetype, word for word. Two questions testing genuinely different reasoning must not.
+- type: "mcq" when four alternatives are printed, "assertion_reason" for the Assertion/Reason format, "numerical" when a bare numeric answer is wanted, "one_word" for a single term or fill-in-the-blank, "short_answer" for 2–3 mark descriptive, "long_answer" for 4+ mark descriptive.
+- options: the printed alternatives in printed order, WITHOUT their (a)/(b)/(c)/(d) labels. null when the question prints none.
+- correct_answer: the option LETTER "A"–"D" if the page marks or prints the answer, otherwise "" — most question banks print their answers in a separate solutions section, and guessing here is worse than leaving it blank.
+- difficulty: your honest reading of it — "easy" for one-step recall or a single substitution, "medium" for two-step reasoning, "hard" for multi-concept problems.
+
+Figures. A question that refers to "the circuit shown", "the graph shown", "the figure", or that cannot be answered from its text alone, has a figure printed with it:
+- has_figure: true for exactly those questions, false otherwise. Do not mark a question as having a figure because the page has one somewhere — only when THAT question's own figure is printed with it.
+- figure_bbox: the box tightly containing that figure, as four integers [ymin, xmin, ymax, xmax] on a 0–1000 scale over the whole page image, top-left origin. Include the figure's own labels and component values, exclude the question text and the options. Accuracy matters — the box is cropped out of the page and printed on the new paper.
+- figure_description: a complete plain-text description of the figure — every component, every value, every label, and how they are arranged or connected. Someone who cannot see the page must be able to draw it correctly from this alone. Used only if the crop fails, so write it properly.
+Set figure_bbox to [0,0,0,0] and figure_description to "" for questions with no figure.
+
+${LATEX_RULES}
+
+Skip anything that is not a question: chapter headings, page numbers, running headers, answer keys, solutions, and hint boxes. If the page has no questions at all, return an empty list.`;
+
+/**
+ * Reference-led generation. Replaces generationSystemPrompt entirely when
+ * settings.source_mode is "reference" — the two disagree on the one thing that
+ * matters most, namely where a question's subject matter comes from. Leaving
+ * the syllabus prompt in place and appending to it produced questions that
+ * split the difference: nominally modelled on the reference, actually written
+ * from the chapter list.
+ */
+export function referenceGenerationSystemPrompt(
+  settings: PaperSettings,
+  fidelity: "reuse" | "variant"
+): string {
+  const shared = `You are preparing a real ${settings.subject} exam paper that a teacher will review and distribute. The teacher has given you a reference paper of their own, and you are working ONLY from the specific source questions handed to you below — one per question you must produce.
+
+ABSOLUTE PRIORITY — the source is the authority:
+- The source question defines the subject matter, the concept tested, the difficulty and the style. Do not reach for what you know about ${examLabel(settings)} papers in general, and never substitute a topic the source does not cover.
+- Every question must be factually correct with exactly one defensible answer. Work each one out fully yourself before committing to it — a source question can be damaged by OCR, and a damaged question must be repaired, not reproduced broken.
+- Produce exactly one question per source, in the order given.`;
+
+  const fidelityRules =
+    fidelity === "reuse"
+      ? `Fidelity — REUSE (the teacher asked for the reference's own questions):
+- Reproduce each source question as printed. Keep its numbers, its wording, its options and their order, and what it asks for.
+- Your job is repair and typesetting, not authorship: fix OCR damage, restore mangled symbols and formulas, complete an option that was truncated, and normalise the maths to LaTeX. Do not "improve" a question that is already intact.
+- If the source prints its correct answer, keep it — but verify it yourself first, and if the source's answer is demonstrably wrong, give the right one and say so in the solution.
+- If the source's answer is missing, work it out and supply it.
+- Write the full step-by-step solution yourself; the source rarely carries one.`
+      : `Fidelity — VARIANT (the teacher wants unseen questions modelled on the reference):
+- Treat each source question as a template. Write a NEW question testing the same concept with the same reasoning steps, the same structure and the same difficulty.
+- Change the numbers, and where it reads naturally change the context (a copper wire becomes an aluminium one, a 60 W bulb becomes a 40 W one). The arithmetic must work out to a clean answer that a student can reach in exam time.
+- Keep the source's question type, its option style and the flavour of its distractors — a distractor should still encode the mistake the source's distractor encoded.
+- Do not simply reword the source. A student who has memorised the source's answer must not be able to answer yours from memory.
+- Never make the question harder or easier than its source.`;
+
+  return `${shared}
+
+${fidelityRules}
+
+${LATEX_RULES}
+
+${QUESTION_TYPE_FORMAT_RULES}
+
+Diagrams:
+- A source question is marked below as carrying a figure when the teacher's reference printed one with it, and that figure is reproduced on the new paper. Only those questions may say "in the circuit shown", "from the graph shown" and so on.
+- Every other question must be answerable from its text alone — never reference a figure, diagram, graph, circuit or table that is not there. If a variant would need a diagram the source did not have, choose different numbers or a different framing instead.
+- Never write a question that asks the STUDENT to draw the figure they are being shown.
+
+Question text hygiene:
+- question_text contains ONLY the question a student reads. No question number, no part name, no marks, and no source tag — drop "(NEET 2017)", "(2004)" and the like. The paper prints its own numbering and marks.
+
+Solutions:
+- Every question gets a complete step-by-step solution a student could learn from: the concept or formula, the working, and why the answer is right.
+- CRITICAL: never identify an option by its letter inside the solution (do not write "hence option B"). Options are re-ordered after you write them, so any letter you cite becomes wrong. Refer to an option by its content or value instead.
+
+Chapter field:
+- Set each question's "chapter" to the topic given for its source question, copied exactly.`;
+}
 
 export function referenceAnalysisPrompt(settings: PaperSettings): string {
   return `You are analyzing pages of a reference exam paper or textbook excerpt uploaded by a ${settings.subject} teacher. Study the images and write a compact style profile (max 300 words) covering:

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getApiUser, jsonError } from "@/lib/api";
 import { institutionSchema, questionTypeSchema } from "@/lib/schemas";
+import { MAX_QUESTIONS_BLUEPRINT } from "@/lib/constants";
 import type { Question } from "@/lib/types";
 
 /**
@@ -34,13 +35,24 @@ const questionSchema = z.object({
   review_reason: z.string().max(2000).optional(),
   figure: questionFigureSchema.optional(),
   teacher_authored: z.boolean().optional(),
+  // Same trap as `figure` above: a key missing from this schema is silently
+  // dropped on every save, so reference provenance has to be listed here or it
+  // survives exactly until the teacher's first edit.
+  reference_item_id: z.string().max(60).optional(),
+  reference_label: z.string().max(20).optional(),
   section_id: z.string().max(40).optional(),
   section_name: z.string().max(40).optional(),
 });
 
 const patchSchema = z.object({
   title: z.string().trim().min(2).max(200).optional(),
-  questions: z.array(questionSchema).max(60).optional(),
+  /*
+   * Sized to what a paper may actually hold. This was 60 while a blueprint
+   * paper prints up to MAX_QUESTIONS_BLUEPRINT (80) — Karnataka's SSLC Science
+   * paper is 45+ and a bigger one is legal — so saving a large paper failed
+   * with a flat "Invalid input" and the teacher's review edits were lost.
+   */
+  questions: z.array(questionSchema).max(MAX_QUESTIONS_BLUEPRINT).optional(),
   institution_details: institutionSchema.optional(),
   status: z.enum(["draft", "finalized"]).optional(),
 });

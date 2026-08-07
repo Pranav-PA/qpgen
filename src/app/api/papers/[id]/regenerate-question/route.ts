@@ -16,7 +16,9 @@ import {
   remainingFigureBudget,
   renderFigureImage,
 } from "@/lib/ai/figure-budget";
-import type { Paper, Question } from "@/lib/types";
+import { pickReplacementItem } from "@/lib/ai/reference-plan";
+import { archetypeKey } from "@/lib/ai/reference-extract";
+import { isReferenceLed, type Paper, type Question, type ReferenceItem } from "@/lib/types";
 
 export const maxDuration = 120;
 
@@ -68,6 +70,41 @@ export async function POST(
     // Excludes the old question's own image so a like-for-like replacement
     // isn't blocked by the slot it is about to vacate.
     const others = paper.questions.filter((q) => q.id !== old.id);
+
+    /*
+     * Reference mode replaces the SOURCE too, not just the wording. Rerunning
+     * the same source question through the model returns the same question
+     * again — which is the one thing "regenerate" must not do — so a source the
+     * paper has not used is chosen first, and the whole question is written
+     * from that instead.
+     */
+    let replacementItem: ReferenceItem | null = null;
+    if (isReferenceLed(paper.settings) && paper.reference_bank) {
+      const bank = paper.reference_bank;
+      const byId = new Map(bank.items.map((i) => [i.id, i]));
+      replacementItem = pickReplacementItem(
+        bank,
+        {
+          itemIds: new Set(
+            paper.questions.map((q) => q.reference_item_id).filter((x): x is string => !!x)
+          ),
+          archetypeKeys: new Set(
+            others
+              .map((q) => q.reference_item_id && byId.get(q.reference_item_id)?.archetype)
+              .filter((a): a is string => !!a)
+              .map(archetypeKey)
+          ),
+        },
+        old.type
+      );
+      if (!replacementItem) {
+        return jsonError(
+          "Every question in your reference PDF is already on this paper, so there is nothing different to swap in. Edit this question instead, or delete it.",
+          409
+        );
+      }
+    }
+
     const gen = await generateQuestions({
       settings: paper.settings,
       slots: [
@@ -90,6 +127,11 @@ export async function POST(
           // "auto" mode ignores it and re-decides fresh either way.
           wants_figure: !!old.figure,
           instruction: body.mode === "guided" ? body.instruction : undefined,
+          reference: replacementItem ?? undefined,
+          // The new source dictates the topic, exactly as it does in a full
+          // generation — keeping the old question's chapter would print a
+          // question under a heading it no longer belongs to.
+          ...(replacementItem ? { chapter: replacementItem.topic } : {}),
         },
       ],
       // The old question goes on the avoid-list so we get something new.
@@ -101,10 +143,27 @@ export async function POST(
     });
     const raw = shuffleMcqOptions(gen.questions[0]);
 
+    /*
+     * A reference question's diagram is the crop from the teacher's own PDF
+     * where one exists — free, exact, and not subject to the generated-image
+     * ceiling. Only the redraw fallback is rationed. See generate-batch, which
+     * makes the same distinction for a whole batch.
+     */
+    const sourceUrl = replacementItem?.figure?.image_url;
+    const renderSpec = sourceUrl
+      ? null
+      : replacementItem
+        ? (replacementItem.figure?.spec ?? null)
+        : raw.figure_spec;
+
     const verification = await verifyQuestions({
       settings: paper.settings,
       questions: [
-        { ...raw, options: raw.options ?? undefined, has_figure: !!raw.figure_spec },
+        {
+          ...raw,
+          options: raw.options ?? undefined,
+          has_figure: !!sourceUrl || !!renderSpec,
+        },
       ],
       provider,
     });
@@ -112,18 +171,19 @@ export async function POST(
 
     // Same per-paper ceiling generate-batch enforces.
     const budget = remainingFigureBudget(others);
-    const capped = !!raw.figure_spec && images.raster !== "off" && budget <= 0;
+    const capped = !!renderSpec && images.raster !== "off" && budget <= 0;
     const questionId = randomUUID();
-    const { imageUrl, imageFailed } =
-      raw.figure_spec && images.raster !== "off" && !capped
+    const { imageUrl: renderedUrl, imageFailed } =
+      renderSpec && images.raster !== "off" && !capped
         ? await renderFigureImage({
             userId: user.id,
             paperId: id,
             questionId,
-            spec: raw.figure_spec,
+            spec: renderSpec,
             raster: images.raster,
           })
         : { imageUrl: undefined, imageFailed: false };
+    const imageUrl = sourceUrl ?? renderedUrl;
 
     const unresolved = hasUnresolvedAnswer(raw);
     const reasons = [
@@ -131,14 +191,23 @@ export async function POST(
       unresolved
         ? "The correct option could not be determined automatically — please select the right answer yourself."
         : null,
-      ...figureReviewNotes({ hasImage: !!imageUrl, imageFailed, capped }),
+      ...figureReviewNotes({
+        hasImage: !!renderedUrl,
+        imageFailed,
+        capped,
+        fromSource: !!sourceUrl,
+      }),
     ].filter(Boolean);
 
     const replacement: Question = {
       id: questionId,
       type: old.type,
       difficulty: raw.difficulty,
-      chapter: paper.settings.mode === "blueprint" ? old.chapter : raw.chapter,
+      chapter: replacementItem
+        ? replacementItem.topic
+        : paper.settings.mode === "blueprint"
+          ? old.chapter
+          : raw.chapter,
       section_id: old.section_id,
       section_name: old.section_name,
       question_text: stripSectionPrefix(raw.question_text, old.section_name),
@@ -148,6 +217,8 @@ export async function POST(
       marks: old.marks,
       negative_marks: old.negative_marks,
       figure: imageUrl ? { image_url: imageUrl } : undefined,
+      reference_item_id: replacementItem?.id,
+      reference_label: replacementItem?.ref_label,
       needs_review: !verdict || !verdict.ok || unresolved || !!imageUrl || imageFailed || capped,
       review_reason: reasons.length > 0 ? reasons.join(" ") : undefined,
     };

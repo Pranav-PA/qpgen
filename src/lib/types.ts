@@ -83,6 +83,14 @@ export interface Question {
   figure?: QuestionFigure;
   /** True if the teacher wrote/edited this question by hand. */
   teacher_authored?: boolean;
+  /**
+   * Reference mode: which question of the teacher's PDF this was drawn from.
+   * Recorded so regenerating picks a source the paper has not already used,
+   * and so the review screen can say where a question came from.
+   */
+  reference_item_id?: string;
+  /** The source's printed question number, for the review screen only. */
+  reference_label?: string;
   /** Blueprint papers only: which part of the paper this question belongs to. */
   section_id?: string;
   section_name?: string;
@@ -291,10 +299,84 @@ export interface InstitutionDetails {
   instructions: string;
 }
 
+/**
+ * Where a paper's questions come from.
+ *
+ * "syllabus" is the original behaviour and what every paper created before
+ * reference mode existed does: questions are written from settings.chapters,
+ * and an uploaded reference PDF contributes style_notes only.
+ *
+ * "reference" moves the authority to the PDF — the teacher's reference is
+ * extracted into a ReferenceBank and every question is drawn from it. The
+ * chapter list, difficulty mix and question-type choice stop applying, because
+ * all three are properties of the source questions instead.
+ */
+export type SourceMode = "syllabus" | "reference";
+
+/** How closely a reference-mode question follows the source it was drawn from. */
+export type ReferenceFidelity = "reuse" | "variant";
+
+/**
+ * A figure belonging to a reference question.
+ *
+ * `image_url` is a crop taken straight out of the source PDF page: exact, free,
+ * and the only version that is guaranteed to match the question. `spec` is the
+ * fallback — a written description handed to the image model when no usable
+ * crop could be taken, which costs a real per-image bill and can be drawn
+ * wrong, so it is never preferred.
+ */
+export interface ReferenceFigure {
+  /** Public URL of the crop taken from the source page, once uploaded. */
+  image_url?: string;
+  /** Plain-text redraw description, used only when there is no crop. */
+  spec?: string;
+  /** Normalised crop box on the source page (0–1, top-left origin). */
+  bbox?: { x0: number; y0: number; x1: number; y1: number };
+}
+
+/** One question read out of the teacher's reference PDF. */
+export interface ReferenceItem {
+  id: string;
+  /** Question number as printed in the source, for the teacher's own reference. */
+  ref_label?: string;
+  /** 1-based index into the rendered page array, not the PDF's own page number. */
+  page: number;
+  /** Sub-topic heading printed above it, or inferred from its content. */
+  topic: string;
+  /**
+   * Short normalised description of what the question *does* ("resistance of a
+   * stretched wire"). The variety rule in lib/ai/reference-plan.ts is built on
+   * this: a question bank routinely prints the same archetype three or four
+   * times, and a paper must not.
+   */
+  archetype: string;
+  type: QuestionType;
+  difficulty: Difficulty;
+  question_text: string;
+  options?: string[];
+  /** Absent when the source prints its answers elsewhere; the model works it out. */
+  correct_answer?: string;
+  figure?: ReferenceFigure;
+}
+
+/** Everything read out of one reference PDF, stored on papers.reference_bank. */
+export interface ReferenceBank {
+  items: ReferenceItem[];
+  /** Distinct topics in printed order — mirrored into settings.chapters. */
+  topics: string[];
+  /** Pages the extractor read, for the "N of M questions" wording. */
+  pages_read: number;
+  extracted_at: string;
+}
+
 export interface PaperSettings {
   exam_type: ExamType;
   exam_type_custom?: string;
   subject: string;
+  /**
+   * Reference-mode papers start with this empty and have it filled with the
+   * bank's topics once extraction runs — see referenceBankSchema's caller.
+   */
   chapters: string[];
   question_count: number;
   question_type: QuestionType | "mixed";
@@ -334,6 +416,13 @@ export interface PaperSettings {
    * blueprint preset and the syllabus grounding in the prompts.
    */
   curriculum?: CurriculumRef;
+  /**
+   * Absent on every paper created before reference mode existed — treat as
+   * "syllabus", which is exactly what those papers did.
+   */
+  source_mode?: SourceMode;
+  /** Reference mode only. Absent means "variant" — nothing is copied verbatim. */
+  reference_fidelity?: ReferenceFidelity;
   /** Absent on papers created before blueprint mode existed — treat as "simple". */
   mode?: "simple" | "blueprint";
   blueprint?: Blueprint;
@@ -343,6 +432,15 @@ export interface PaperSettings {
 
 export function isBlueprint(s: PaperSettings): boolean {
   return s.mode === "blueprint" && !!s.blueprint;
+}
+
+/** True when this paper's questions are drawn from a reference PDF. */
+export function isReferenceLed(s: PaperSettings): boolean {
+  return s.source_mode === "reference";
+}
+
+export function referenceFidelity(s: PaperSettings): ReferenceFidelity {
+  return s.reference_fidelity ?? "variant";
 }
 
 export interface Paper {
@@ -358,6 +456,8 @@ export interface Paper {
   questions: Question[];
   settings: PaperSettings;
   reference_pdf_used: boolean;
+  /** Populated only for reference-mode papers, once extraction has run. */
+  reference_bank?: ReferenceBank | null;
   status: PaperStatus;
   created_at: string;
   updated_at: string;

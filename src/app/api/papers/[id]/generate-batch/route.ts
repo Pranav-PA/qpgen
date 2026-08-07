@@ -15,7 +15,7 @@ import {
   remainingFigureBudget,
   renderFigureImage,
 } from "@/lib/ai/figure-budget";
-import type { Paper, Question } from "@/lib/types";
+import { isReferenceLed, type Paper, type Question } from "@/lib/types";
 
 export const maxDuration = 300;
 
@@ -36,7 +36,14 @@ export async function POST(
   if (!paper) return jsonError("Paper not found.", 404);
 
   const existing = paper.questions ?? [];
-  const slots = nextBatchSlots(paper.settings, existing.length);
+  const referenceLed = isReferenceLed(paper.settings);
+  if (referenceLed && !paper.reference_bank) {
+    return jsonError(
+      "This paper is set to generate only from a reference PDF, but the PDF has not been read yet. Re-upload it from the new-paper screen.",
+      409
+    );
+  }
+  const slots = nextBatchSlots(paper.settings, existing, paper.reference_bank);
   if (slots.length === 0) {
     return NextResponse.json({ questions_total: existing.length, done: true });
   }
@@ -79,7 +86,13 @@ export async function POST(
     });
     await logUsage({ user_id: user.id, action: "generate_batch", usage: gen.usage });
 
-    const shuffled = gen.questions.map(shuffleMcqOptions);
+    /*
+     * Questions are paired with their slot by position, so a model that
+     * returns more than it was asked for would append questions carrying
+     * another slot's marks, part — and, in reference mode, another source
+     * question's diagram. Trim to the slots that exist.
+     */
+    const shuffled = gen.questions.slice(0, slots.length).map(shuffleMcqOptions);
 
     const verification = await verifyQuestions({
       settings: paper.settings,
@@ -103,16 +116,38 @@ export async function POST(
      * but the same cap applies harmlessly.
      */
     let figureBudget = remainingFigureBudget(existing);
+
+    /*
+     * A reference-led question's diagram is the one the teacher's own PDF
+     * printed, cropped out of the page at upload time. It costs nothing, it
+     * cannot be drawn wrong, and the question is usually unanswerable without
+     * it ("the circuit shown"), so it is attached regardless of both the
+     * per-paper image ceiling and the admin raster tier — neither of which is
+     * about diagrams as such, both of which are about what generated images
+     * cost. Only the fallback redraw path is rationed.
+     */
+    const figureFromSource = slots.map(
+      (slot) => slot?.reference?.figure?.image_url ?? null
+    );
+    /** The spec each question would need rendered, before any rationing. */
+    const wantsRender = shuffled.map((raw, i) =>
+      figureFromSource[i]
+        ? null
+        : referenceLed
+          ? (slots[i]?.reference?.figure?.spec ?? null)
+          : raw.figure_spec
+    );
+
     /** Spec to render for each question, or null to keep it text-only. */
-    const figureToRender = shuffled.map((raw) => {
-      if (!raw.figure_spec || images.raster === "off") return null;
+    const figureToRender = wantsRender.map((spec) => {
+      if (!spec || images.raster === "off") return null;
       if (figureBudget <= 0) return null;
       figureBudget -= 1;
-      return raw.figure_spec;
+      return spec;
     });
     /** Wanted a diagram but lost it to the ceiling, not to a render failure. */
-    const figureCapped = shuffled.map(
-      (raw, i) => !!raw.figure_spec && images.raster !== "off" && !figureToRender[i]
+    const figureCapped = wantsRender.map(
+      (spec, i) => !!spec && images.raster !== "off" && !figureToRender[i]
     );
 
     const newQuestions: Question[] = await Promise.all(
@@ -130,7 +165,7 @@ export async function POST(
          * differs, and needs_review explains which happened.
          */
         const figureSpec = figureToRender[i];
-        const { imageUrl, imageFailed } = figureSpec
+        const { imageUrl: renderedUrl, imageFailed } = figureSpec
           ? await renderFigureImage({
               userId: user.id,
               paperId: id,
@@ -139,6 +174,8 @@ export async function POST(
               raster: images.raster,
             })
           : { imageUrl: undefined, imageFailed: false };
+        const sourceUrl = figureFromSource[i] ?? undefined;
+        const imageUrl = sourceUrl ?? renderedUrl;
 
         /*
          * The verifier reads text only — it cannot tell whether a rendered
@@ -152,9 +189,10 @@ export async function POST(
             ? "The correct option could not be determined automatically — please select the right answer yourself."
             : null,
           ...figureReviewNotes({
-            hasImage: !!imageUrl,
+            hasImage: !!renderedUrl,
             imageFailed,
             capped: figureCapped[i],
+            fromSource: !!sourceUrl,
           }),
         ].filter(Boolean);
 
@@ -178,6 +216,8 @@ export async function POST(
           // model papers don't caption inline figures beyond what the
           // question text already says.
           figure: imageUrl ? { image_url: imageUrl } : undefined,
+          reference_item_id: slot?.reference?.id,
+          reference_label: slot?.reference?.ref_label,
           needs_review:
             !verdict || !verdict.ok || unresolved || !!imageUrl || imageFailed || figureCapped[i],
           review_reason: reasons.length > 0 ? reasons.join(" ") : undefined,

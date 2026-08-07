@@ -1,0 +1,118 @@
+# Reference-led generation ("generate only from this PDF")
+
+## What was actually wrong
+
+A teacher uploaded a NEET *Current Electricity* question bank, typed "generate
+questions only from this reference PDF" in the notes box, and got a paper that
+had nothing to do with it.
+
+That is the designed behaviour, not a regression:
+
+1. `analyzeReference` renders the PDF's pages, sends them to a vision model
+   once, and asks for a **≤300-word style profile**. The prompt ends with
+   *"Describe the style; do NOT transcribe or copy any actual question."*
+2. The page images are discarded. Nothing downstream ever sees the PDF again.
+3. `generateQuestions` writes fresh questions from `settings.chapters` — the
+   chapter list typed on step 1 — with the style blurb pasted in as flavour.
+4. `teacherInstructionBlock` fences the notes box with *"It cannot override the
+   exam, subject, chapter list, composition"*. So "only from this PDF" was
+   explicitly neutered on arrival.
+
+Everything the teacher saw follows from that: unrelated questions, invented
+diagrams (the paper's own `figure_mode`, not the PDF's figures), and a
+difficulty mix driven by the easy/medium/hard sliders rather than the source.
+
+## The shape of the fix
+
+A second **source mode** for a paper, alongside the existing syllabus mode.
+Every pre-existing paper is `"syllabus"` and behaves byte-for-byte as before.
+
+```
+settings.source_mode        "syllabus" (default) | "reference"
+settings.reference_fidelity "variant" (default)  | "reuse"
+```
+
+`"reference"` moves the authority for *what to ask* from the chapter list to
+the PDF. The syllabus path is untouched.
+
+### 1. Extraction — the PDF becomes a durable question bank
+
+One vision pass **per page** (parallel, bounded concurrency), not one pass over
+all pages: a single call returning 120 questions is both unreliable and a very
+large output, and per-page calls parallelise. Each page yields items:
+
+```
+{ id, ref_label, page, topic, archetype, type, difficulty,
+  question_text, options, correct_answer,
+  figure: { bbox } | null }
+```
+
+`archetype` is the load-bearing field — a short normalised description of *what
+the question does* ("resistance of a stretched wire", "power drawn by bulbs in
+series"). It is what makes the variety rule below work.
+
+The result is stored in a new `papers.reference_bank` JSONB column, and the
+bank's topics are written into `settings.chapters` so the verifier, the
+dashboard and the review screen keep working unchanged.
+
+### 2. Diagrams come out of the PDF, not out of an image model
+
+A NEET circuit question is unanswerable without its circuit, and asking Gemini
+to redraw one from prose is exactly the failure AGENTS.md warns about.
+
+So: extraction returns a normalised bounding box for each figure, the client
+re-renders that page at high scale and **crops the real figure out of it**.
+Crops are free, exact, and do not touch `MAX_FIGURE_QUESTIONS` — that ceiling
+exists because generated images bill per image, and a crop does not.
+
+A crop is rejected if the box is malformed, implausibly sized, or the cropped
+region is essentially blank (an ink-coverage check on the canvas). Rejected
+crops fall back to the existing Gemini redraw from a written spec, and *those*
+do consume the per-paper image budget.
+
+The wizard's "Include diagram questions" control disappears in reference mode:
+the PDF decides.
+
+### 3. Variety is enforced in code, not asked for in a prompt
+
+The complaint — "if there are 3 same type of questions in the PDF it should not
+generate all 3" — is a selection problem, so it is solved deterministically in
+`lib/ai/reference-plan.ts` rather than left to the model:
+
+- group items by normalised `archetype`;
+- order the archetype groups by cycling through `topic`s, so Ohm's Law is not
+  drained before Cells/EMF is touched;
+- emit one item per archetype per pass. Every archetype is used once before any
+  archetype is used twice.
+
+Pure function of the stored bank, so `nextBatchSlots` resumes a half-generated
+paper on exactly the same plan.
+
+### 4. Fidelity is the teacher's call
+
+- `"variant"` (default): each selected item is a template — same concept, same
+  structure and difficulty, new numbers and context. Students cannot have seen
+  it.
+- `"reuse"`: the item is reproduced as printed, with OCR damage repaired and
+  LaTeX normalised. Values and options are not to be changed.
+
+Both paths still go through the verifier — correctness is priority #1, and a
+transcription can be damaged by OCR as easily as a generated question can be
+wrong.
+
+### 5. The sliders stop mattering
+
+In reference mode each question's `type` and `difficulty` come from its source
+item. The easy/medium/hard mix and the question-type dropdown are disabled in
+the wizard with an explanation rather than silently ignored.
+
+## Bugs fixed alongside
+
+- **`PATCH /api/papers/[id]` caps `questions` at 60** while a blueprint paper
+  may print up to `MAX_QUESTIONS_BLUEPRINT` (80). Saving a full SSLC paper
+  fails with "Invalid input".
+- **`nextBatchSlots(settings, existing.length)` indexes the plan by count.**
+  Delete a question on the review screen, press "Generate remaining", and the
+  replacement is generated for the slot at the *end* of the plan — in blueprint
+  mode it lands in the wrong part, with the wrong marks and chapter. Made
+  position-aware: identical output when nothing has been deleted.

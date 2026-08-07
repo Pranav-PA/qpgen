@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { renderPdfToImages } from "@/lib/pdf";
+import { cropReferenceFigures, renderPdfToImages, type FigureCropRequest } from "@/lib/pdf";
 import Icon from "@/components/Icon";
 import NumberInput from "@/components/NumberInput";
 import {
@@ -90,10 +90,16 @@ function figuresOn(s: PaperSettings): boolean {
   return s.figure_mode === "auto" || (s.figure_questions ?? 0) > 0;
 }
 
+/** True when the paper's questions come from the uploaded PDF, not the chapter list. */
+function referenceOnly(s: PaperSettings): boolean {
+  return s.source_mode === "reference";
+}
+
 type GenPhase =
   | { phase: "idle" }
   | { phase: "creating" }
   | { phase: "reference" }
+  | { phase: "cropping" }
   | { phase: "generating"; done: number; total: number }
   | { phase: "error"; message: string; paperId?: string };
 
@@ -119,6 +125,13 @@ export default function NewPaperWizard({
   });
   const [maxMarksTouched, setMaxMarksTouched] = useState(false);
   const [refPages, setRefPages] = useState<ReferencePage[]>([]);
+  /**
+   * The PDF itself, kept alongside the rendered pages. Reference mode crops
+   * each figure out of the source page at print resolution, and the page
+   * images above are downscaled to ~1200px for the vision model to read — far
+   * too coarse to print a circuit from — so the file has to stay reachable.
+   */
+  const [refFile, setRefFile] = useState<File | null>(null);
   const [refInfo, setRefInfo] = useState("");
   const [refBusy, setRefBusy] = useState(false);
   const [gen, setGen] = useState<GenPhase>({ phase: "idle" });
@@ -221,7 +234,9 @@ export default function NewPaperWizard({
       return "";
     }
 
-    if (settings.chapters.length === 0)
+    // Reference-only papers have no chapter list of their own: it is filled
+    // with the reference's own sub-topics once the PDF has been read.
+    if (settings.chapters.length === 0 && !referenceOnly(settings))
       return "Add at least one chapter or topic — questions are generated only from these.";
     return "";
   }
@@ -245,6 +260,7 @@ export default function NewPaperWizard({
   async function handleReferenceFile(file: File | undefined) {
     setRefInfo("");
     setRefPages([]);
+    setRefFile(null);
     if (!file) return;
     if (file.size > MAX_REFERENCE_PDF_MB * 1024 * 1024) {
       setRefInfo(
@@ -256,10 +272,11 @@ export default function NewPaperWizard({
     try {
       const result = await renderPdfToImages(file);
       setRefPages(result.pages);
+      setRefFile(file);
       setRefInfo(
         result.truncated
-          ? `This PDF has ${result.totalPages} pages. To keep generation fast and affordable, only the first ${MAX_REFERENCE_PDF_PAGES} pages will be used as the style reference.`
-          : `${result.pages.length} page${result.pages.length === 1 ? "" : "s"} ready to use as style reference.`
+          ? `This PDF has ${result.totalPages} pages. To keep generation fast and affordable, only the first ${MAX_REFERENCE_PDF_PAGES} pages will be read.`
+          : `${result.pages.length} page${result.pages.length === 1 ? "" : "s"} ready.`
       );
     } catch {
       setRefInfo(
@@ -296,8 +313,41 @@ export default function NewPaperWizard({
     setInst({ ...inst, logo_url: data.publicUrl });
   }
 
+  /**
+   * Cuts the reference's figures out of the source PDF and hands them to the
+   * server, which uploads them and records them against the bank.
+   *
+   * Deliberately never fatal. A paper whose figures failed to crop still
+   * generates — each such question falls back to redrawing its diagram from
+   * the description the extractor wrote, and the teacher sees the result on
+   * the review screen either way. Losing a whole paper (and the generation
+   * quota it has already spent) over a canvas failure would not be a trade
+   * worth making.
+   */
+  async function sendFigureCrops(paperId: string, crops: unknown) {
+    if (!refFile || !Array.isArray(crops) || crops.length === 0) return;
+    setGen({ phase: "cropping" });
+    try {
+      const cropped = await cropReferenceFigures(refFile, crops as FigureCropRequest[]);
+      if (cropped.length === 0) return;
+      await fetch(`/api/papers/${paperId}/reference/crops`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ crops: cropped }),
+      });
+    } catch {
+      // Fall through to generation; the redraw path covers these questions.
+    }
+  }
+
   /* ----------------------------- generation driver */
   async function generate() {
+    if (referenceOnly(settings) && refPages.length === 0) {
+      setStepError(
+        "Reference-only mode needs a PDF. Upload one, or switch it off to generate from your chapter list."
+      );
+      return;
+    }
     // Only the fixed-count mode has a number to validate; in "auto" the model
     // picks the questions and the server enforces the ceiling.
     if (wantsFigures && settings.figure_mode !== "auto") {
@@ -328,6 +378,13 @@ export default function NewPaperWizard({
       if (!createRes.ok) throw new Error(created.error || "Could not create the paper.");
       const paperId: string = created.paper_id;
 
+      /*
+       * The reference pass does very different work in the two modes: a style
+       * profile for a syllabus paper, or the PDF's own questions extracted into
+       * this paper's bank for a reference-only one. Only the latter comes back
+       * with figures to cut out and a revised question count.
+       */
+      let total = settings.question_count;
       if (refPages.length > 0) {
         setGen({ phase: "reference" });
         const refRes = await fetch(`/api/papers/${paperId}/reference`, {
@@ -335,19 +392,31 @@ export default function NewPaperWizard({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pages: refPages }),
         });
+        const refBody = await refRes.json().catch(() => ({}));
         if (!refRes.ok) {
-          const body = await refRes.json().catch(() => ({}));
-          throw new Error(
-            body.error ||
-              "Reading the reference PDF failed. You can retry, or generate without it."
+          throw Object.assign(
+            new Error(
+              refBody.error ||
+                "Reading the reference PDF failed. You can retry, or generate without it."
+            ),
+            // No questions exist yet, so there is nothing to review — but the
+            // paper does, and offering it lets the teacher retry from there
+            // rather than start the wizard again.
+            { paperId }
           );
+        }
+
+        if (referenceOnly(settings)) {
+          if (typeof refBody.question_count === "number" && refBody.question_count > 0) {
+            total = refBody.question_count;
+          }
+          await sendFigureCrops(paperId, refBody.crops);
         }
       }
 
       // Batched generation: each call generates + verifies one batch and
       // reports overall progress until the paper is complete.
       let done = 0;
-      const total = settings.question_count;
       setGen({ phase: "generating", done, total });
       let guard = 0;
       while (done < total && guard < 25) {
@@ -379,16 +448,21 @@ export default function NewPaperWizard({
     const pct =
       gen.phase === "generating" && gen.total > 0
         ? Math.round((gen.done / gen.total) * 100)
-        : gen.phase === "reference"
-          ? 8
-          : 3;
+        : gen.phase === "cropping"
+          ? 12
+          : gen.phase === "reference"
+            ? 8
+            : 3;
     return (
       <div className="max-w-lg mx-auto card p-8 text-center" aria-live="polite">
         <h1 className="text-lg font-semibold mb-2">Generating your paper</h1>
         <p className="text-sm text-muted mb-6">
           {gen.phase === "creating" && "Setting things up…"}
           {gen.phase === "reference" &&
-            "Reading your reference PDF to learn its style and difficulty…"}
+            (referenceOnly(settings)
+              ? "Reading the questions out of your reference PDF, page by page…"
+              : "Reading your reference PDF to learn its style and difficulty…")}
+          {gen.phase === "cropping" && "Cutting the diagrams out of your PDF…"}
           {gen.phase === "generating" &&
             `Generated and verified ${gen.done} of ${gen.total} questions…`}
         </p>
@@ -460,6 +534,7 @@ export default function NewPaperWizard({
             blueprintMode={blueprintMode}
             setMode={setMode}
             setBlueprint={setBlueprint}
+            fromReference={referenceOnly(settings)}
           />
         )}
         {step === 2 && (
@@ -480,7 +555,11 @@ export default function NewPaperWizard({
             onFile={handleReferenceFile}
             onClear={() => {
               setRefPages([]);
+              setRefFile(null);
               setRefInfo("");
+              // Reference-only mode without a reference is not a state the
+              // paper can generate in, so removing the PDF turns it off too.
+              setSettings((s) => ({ ...s, source_mode: undefined }));
             }}
             extraInstructions={settings.extra_instructions ?? ""}
             onExtraInstructions={(v) =>
@@ -781,12 +860,15 @@ function StepExam({
   blueprintMode,
   setMode,
   setBlueprint,
+  fromReference,
 }: {
   settings: PaperSettings;
   setSettings: (s: PaperSettings) => void;
   blueprintMode: boolean;
   setMode: (m: "simple" | "blueprint") => void;
   setBlueprint: (b: Blueprint) => void;
+  /** Reference-only mode: chapters, type and difficulty come from the PDF. */
+  fromReference: boolean;
 }) {
   const [chapterInput, setChapterInput] = useState("");
   const supportsBlueprint =
@@ -813,6 +895,24 @@ function StepExam({
 
   return (
     <div className="space-y-5">
+      {/*
+        Reference-only mode makes three of the controls on this step
+        meaningless — the PDF supplies the topics, the question types and the
+        difficulty of every question. Disabling them and saying so beats
+        leaving them editable and silently ignoring them, which is exactly the
+        confusion this whole mode exists to end.
+      */}
+      {fromReference && (
+        <p className="text-sm rounded-lg border border-accent/30 bg-accent-soft text-accent px-3 py-2 flex items-start gap-2">
+          <Icon name="alert" className="size-4 mt-0.5 shrink-0" />
+          <span>
+            This paper is set to come <strong>only</strong> from your reference
+            PDF. The chapters, question types and difficulty mix below are taken
+            from the PDF itself, so they are switched off here. Turn the option
+            off on the last step to edit them.
+          </span>
+        </p>
+      )}
       <SyllabusPicker settings={settings} setSettings={setSettings} />
 
       <div className="grid sm:grid-cols-2 gap-4">
@@ -911,6 +1011,7 @@ function StepExam({
             className="input"
             placeholder='e.g. "Laws of Motion" — press Enter to add'
             value={chapterInput}
+            disabled={fromReference}
             onChange={(e) => setChapterInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -919,13 +1020,27 @@ function StepExam({
               }
             }}
           />
-          <button type="button" className="btn-secondary shrink-0" onClick={addChapter}>
+          <button
+            type="button"
+            className="btn-secondary shrink-0"
+            disabled={fromReference}
+            onClick={addChapter}
+          >
             Add
           </button>
         </div>
         <p className="help">
-          Questions are generated <strong>only</strong> from these chapters. Be
-          specific — &ldquo;Genetics: Mendelian inheritance&rdquo; beats &ldquo;Biology&rdquo;.
+          {fromReference ? (
+            <>
+              Taken from your reference PDF — its own sub-topic headings become
+              this paper&apos;s chapters once it has been read.
+            </>
+          ) : (
+            <>
+              Questions are generated <strong>only</strong> from these chapters. Be
+              specific — &ldquo;Genetics: Mendelian inheritance&rdquo; beats &ldquo;Biology&rdquo;.
+            </>
+          )}
         </p>
         {settings.chapters.length > 0 && (
           <ul className="flex flex-wrap gap-2 mt-2">
@@ -962,13 +1077,17 @@ function StepExam({
             value={settings.question_count}
             onChange={(n) => setSettings({ ...settings, question_count: n })}
           />
-          <p className="help">Up to {MAX_QUESTIONS_PER_PAPER} per paper.</p>
+          <p className="help">
+            Up to {MAX_QUESTIONS_PER_PAPER} per paper.
+            {fromReference && " Lowered automatically if your PDF has fewer."}
+          </p>
         </div>
         <div>
           <label htmlFor="qtype" className="label">Question type</label>
           <select
             id="qtype"
             className="input"
+            disabled={fromReference}
             value={settings.question_type}
             onChange={(e) =>
               setSettings({
@@ -990,7 +1109,7 @@ function StepExam({
       </>
       )}
 
-      <fieldset>
+      <fieldset disabled={fromReference}>
         <legend className="label">Difficulty mix (%)</legend>
         <div className="grid grid-cols-3 gap-3">
           {(
@@ -1019,8 +1138,10 @@ function StepExam({
             </div>
           ))}
         </div>
-        <p className={`help ${diffSum !== 100 ? "text-danger" : ""}`}>
-          Total: {diffSum}% {diffSum !== 100 && "— must add up to 100"}
+        <p className={`help ${diffSum !== 100 && !fromReference ? "text-danger" : ""}`}>
+          {fromReference
+            ? "Each question keeps the difficulty of the reference question it came from."
+            : `Total: ${diffSum}%${diffSum !== 100 ? " — must add up to 100" : ""}`}
         </p>
       </fieldset>
 
@@ -1234,18 +1355,38 @@ function StepReference({
   maxMarks: number;
 }) {
   const wantsFigures = figuresOn(settings);
+  const fromReference = referenceOnly(settings);
   const figureModel = images.raster !== "off" ? IMAGE_MODEL_FOR_TIER[images.raster] : null;
   const figureCostEach = figureModel ? IMAGE_COST_USD[figureModel] ?? 0 : 0;
   const fileInput = useRef<HTMLInputElement>(null);
+
+  function setReferenceOnly(on: boolean) {
+    setSettings((s) => ({
+      ...s,
+      source_mode: on ? "reference" : undefined,
+      reference_fidelity: on ? (s.reference_fidelity ?? "variant") : undefined,
+      // The diagram controls are hidden in reference mode because the PDF's own
+      // figures are used, so clear them rather than leave a stale count behind.
+      ...(on ? { figure_mode: undefined, figure_questions: undefined } : {}),
+      // The difficulty inputs are about to be disabled; a mix that does not add
+      // up to 100 would then be unfixable and would fail validation on save.
+      difficulty:
+        on &&
+        s.difficulty.easy_pct + s.difficulty.medium_pct + s.difficulty.hard_pct !== 100
+          ? { easy_pct: 30, medium_pct: 50, hard_pct: 20 }
+          : s.difficulty,
+    }));
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h2 className="font-semibold mb-1">Reference PDF <span className="text-muted font-normal text-sm">(optional)</span></h2>
         <p className="text-sm text-muted mb-3">
-          Upload a past paper or textbook excerpt and the AI will mirror its
-          style and difficulty. Pages are read visually — equations and
-          diagrams included — and are <strong>not stored</strong> after
-          generation. First {MAX_REFERENCE_PDF_PAGES} pages only.
+          Upload a past paper, question bank or textbook excerpt. Pages are read
+          visually — equations and diagrams included — and are{" "}
+          <strong>not stored</strong> after generation. First{" "}
+          {MAX_REFERENCE_PDF_PAGES} pages only.
         </p>
         <input
           ref={fileInput}
@@ -1283,6 +1424,99 @@ function StepReference({
             ))}
           </div>
         )}
+
+        {/*
+          The switch between "write in this PDF's style" and "ask this PDF's
+          questions". It only exists once a PDF is attached, because without
+          one it has nothing to mean.
+        */}
+        {refPages.length > 0 && (
+          <fieldset className="border border-line rounded-lg p-3 mt-4">
+            <legend className="text-xs text-muted px-1">How to use it</legend>
+            <div className="space-y-2">
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="source-mode"
+                  className="mt-1"
+                  checked={!fromReference}
+                  onChange={() => setReferenceOnly(false)}
+                />
+                <span>
+                  <strong>As a style guide.</strong>
+                  <span className="block text-muted text-xs mt-0.5">
+                    Questions come from the chapters you chose; the PDF sets the
+                    tone, phrasing and difficulty.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="source-mode"
+                  className="mt-1"
+                  checked={fromReference}
+                  onChange={() => setReferenceOnly(true)}
+                />
+                <span>
+                  <strong>Generate only from this PDF.</strong>
+                  <span className="block text-muted text-xs mt-0.5">
+                    Every question is drawn from a question in the PDF, with its
+                    diagrams. Your chapter list, question type and difficulty mix
+                    stop applying — the PDF supplies all three. Repeated question
+                    types are used once, not three times over.
+                  </span>
+                </span>
+              </label>
+            </div>
+
+            {fromReference && (
+              <div className="mt-3 pt-3 border-t border-line">
+                <span className="label">How close to the original?</span>
+                <div className="space-y-2 mt-1">
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="reference-fidelity"
+                      className="mt-1"
+                      checked={(settings.reference_fidelity ?? "variant") === "variant"}
+                      onChange={() =>
+                        setSettings((s) => ({ ...s, reference_fidelity: "variant" }))
+                      }
+                    />
+                    <span>
+                      <strong>New versions of them.</strong>
+                      <span className="block text-muted text-xs mt-0.5">
+                        Same concept, same structure and difficulty, different
+                        numbers — a student who has worked through the PDF
+                        cannot answer these from memory.
+                      </span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="reference-fidelity"
+                      className="mt-1"
+                      checked={settings.reference_fidelity === "reuse"}
+                      onChange={() =>
+                        setSettings((s) => ({ ...s, reference_fidelity: "reuse" }))
+                      }
+                    />
+                    <span>
+                      <strong>The PDF&apos;s own questions.</strong>
+                      <span className="block text-muted text-xs mt-0.5">
+                        Reproduced as printed, with scanning errors repaired and
+                        the maths typeset properly. Check you are entitled to
+                        reprint them before distributing.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </fieldset>
+        )}
       </div>
 
       <div className="border-t border-line pt-5">
@@ -1291,9 +1525,11 @@ function StepReference({
           <span className="text-muted font-normal text-sm">(optional)</span>
         </label>
         <p className="text-sm text-muted mb-3">
-          {refPages.length > 0
-            ? "Tell the AI how to use your reference — which part to draw from, or what to leave out."
-            : "Tell the AI anything extra about the questions you want."}
+          {fromReference
+            ? "Narrow which of the PDF's questions get used — a section to stick to, a topic to leave out."
+            : refPages.length > 0
+              ? "Tell the AI how to use your reference — which part to draw from, or what to leave out."
+              : "Tell the AI anything extra about the questions you want."}
         </p>
         <textarea
           id="extra-instructions"
@@ -1303,20 +1539,37 @@ function StepReference({
           value={extraInstructions}
           onChange={(e) => onExtraInstructions(e.target.value)}
           placeholder={
-            refPages.length > 0
-              ? "e.g. Only use questions from Section B. Keep the numerical style but change all the values."
-              : "e.g. Focus on application questions rather than definitions. No questions needing diagrams."
+            fromReference
+              ? "e.g. Skip the questions on drift velocity. Prefer the numerical ones."
+              : refPages.length > 0
+                ? "e.g. Only use questions from Section B. Keep the numerical style but change all the values."
+                : "e.g. Focus on application questions rather than definitions. No questions needing diagrams."
           }
         />
         <p className="help mt-1">
-          This narrows what gets generated — it cannot change the chapters,
-          question count or marks you set earlier.
+          {fromReference
+            ? "This narrows which of the PDF's questions are used. It cannot bring in questions from outside the PDF — that is what this mode is for."
+            : "This narrows what gets generated — it cannot change the chapters, question count or marks you set earlier."}
         </p>
       </div>
 
       <div className="border-t border-line pt-5">
         <h2 className="font-semibold mb-1">Diagram questions</h2>
-        {images.raster === "off" ? (
+        {/*
+          There is no choice to offer in reference mode: a question that says
+          "the circuit shown" is unanswerable without the circuit the PDF
+          printed with it, and one whose source had no figure must not acquire
+          an invented one. Both are settled by the source, so the control is
+          replaced with an explanation of what will happen.
+        */}
+        {fromReference ? (
+          <p className="text-sm text-muted">
+            Diagrams come from your PDF. Where a question in it is printed with
+            a circuit, graph or figure, that figure is cut out of the page and
+            printed with the question — the real one, not a redrawn copy. Every
+            question that gets one is flagged for you to check the crop.
+          </p>
+        ) : images.raster === "off" ? (
           <p className="text-sm text-muted">
             Diagram questions are currently switched off by the administrator.
             Every question will be text-only; you can still attach your own
@@ -1423,8 +1676,12 @@ function StepReference({
         <dl className="text-sm grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
           <dt className="text-muted">Paper</dt>
           <dd className="font-medium">{title}</dd>
-          <dt className="text-muted">Chapters</dt>
-          <dd>{settings.chapters.join(", ") || "—"}</dd>
+          <dt className="text-muted">Questions from</dt>
+          <dd>
+            {fromReference
+              ? `Your reference PDF only (${settings.reference_fidelity === "reuse" ? "its own questions" : "new versions of its questions"})`
+              : settings.chapters.join(", ") || "—"}
+          </dd>
           <dt className="text-muted">Questions</dt>
           <dd>
             {settings.mode === "blueprint" && settings.blueprint ? (
@@ -1442,9 +1699,11 @@ function StepReference({
             ) : (
               <>
                 {settings.question_count} ×{" "}
-                {settings.question_type === "mixed"
-                  ? "mixed types"
-                  : settings.question_type.replace("_", " ")}
+                {fromReference
+                  ? "types taken from the PDF"
+                  : settings.question_type === "mixed"
+                    ? "mixed types"
+                    : settings.question_type.replace("_", " ")}
                 , +{settings.marks_per_question}/−{settings.negative_marks},{" "}
                 {maxMarks} marks total
               </>
@@ -1452,8 +1711,14 @@ function StepReference({
           </dd>
           <dt className="text-muted">Difficulty</dt>
           <dd>
-            {settings.difficulty.easy_pct}% easy · {settings.difficulty.medium_pct}% medium ·{" "}
-            {settings.difficulty.hard_pct}% hard
+            {fromReference ? (
+              "Inherited from each source question"
+            ) : (
+              <>
+                {settings.difficulty.easy_pct}% easy · {settings.difficulty.medium_pct}% medium ·{" "}
+                {settings.difficulty.hard_pct}% hard
+              </>
+            )}
           </dd>
           <dt className="text-muted">Page layout</dt>
           <dd>{settings.layout_columns === 2 ? "2 columns" : "1 column"}</dd>

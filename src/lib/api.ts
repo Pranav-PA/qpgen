@@ -9,6 +9,9 @@ export function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
+/** The request-scoped, RLS-bound client — for routes that split work into helpers. */
+export type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
+
 /** Auth for API routes. Returns a context or a ready error response. */
 export async function getApiUser() {
   const supabase = await createClient();
