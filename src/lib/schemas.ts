@@ -132,6 +132,7 @@ export const paperSettingsSchema = z
     layout_columns: z.union([z.literal(1), z.literal(2)]).optional(),
     source_mode: z.enum(["syllabus", "reference"]).optional(),
     reference_fidelity: z.enum(["reuse", "variant"]).optional(),
+    reference_figures: z.enum(["crop", "redraw"]).optional(),
   })
   .refine((s) => s.source_mode === "reference" || s.chapters.length > 0, {
     message: "Add at least one chapter or topic.",

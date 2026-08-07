@@ -317,6 +317,21 @@ export type SourceMode = "syllabus" | "reference";
 export type ReferenceFidelity = "reuse" | "variant";
 
 /**
+ * What to print where the source question carried a figure.
+ *
+ * "crop" cuts the figure straight out of the source page: free, exact, and
+ * nothing is invented — but it inherits the page, so a box that is slightly
+ * wrong can clip a label or catch a line of surrounding text, and a poor scan
+ * stays a poor scan.
+ *
+ * "redraw" takes that same crop and hands it to the image model as the thing
+ * to copy, getting back a clean black-and-white exam figure. It is grounded in
+ * the real diagram rather than in a written description — which is what makes
+ * it safe enough to offer — but it bills per image and is capped per paper.
+ */
+export type ReferenceFigureMode = "crop" | "redraw";
+
+/**
  * A figure belonging to a reference question.
  *
  * `image_url` is a crop taken straight out of the source PDF page: exact, free,
@@ -423,6 +438,8 @@ export interface PaperSettings {
   source_mode?: SourceMode;
   /** Reference mode only. Absent means "variant" — nothing is copied verbatim. */
   reference_fidelity?: ReferenceFidelity;
+  /** Reference mode only. Absent means "crop" — the PDF's own figure, at no cost. */
+  reference_figures?: ReferenceFigureMode;
   /** Absent on papers created before blueprint mode existed — treat as "simple". */
   mode?: "simple" | "blueprint";
   blueprint?: Blueprint;
@@ -441,6 +458,10 @@ export function isReferenceLed(s: PaperSettings): boolean {
 
 export function referenceFidelity(s: PaperSettings): ReferenceFidelity {
   return s.reference_fidelity ?? "variant";
+}
+
+export function referenceFigureMode(s: PaperSettings): ReferenceFigureMode {
+  return s.reference_figures ?? "crop";
 }
 
 export interface Paper {

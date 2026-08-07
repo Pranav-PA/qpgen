@@ -70,8 +70,52 @@ region is essentially blank (an ink-coverage check on the canvas). Rejected
 crops fall back to the existing Gemini redraw from a written spec, and *those*
 do consume the per-paper image budget.
 
-The wizard's "Include diagram questions" control disappears in reference mode:
-the PDF decides.
+The wizard's "Include diagram questions" control is replaced in reference mode
+by a choice between two ways of getting the PDF's figure onto the page.
+
+#### Trimming the box (found on the first live run)
+
+Boxes come back generous. On the first real paper the Q37 crop swallowed the
+tail of the question's own sentence *and* the top row of the source's
+`(a)/(b)/(c)/(d)` options, so the answer options printed inside the figure.
+Sharpening the extraction prompt did not fix it — measured against the PDF's
+text layer, the boxes still enclosed the option markers.
+
+So the crop is trimmed deterministically instead. The page's text layer says
+exactly where the prose is; any prose or option line inside the box is closed
+out from whichever side of the figure it sits on, and short value-shaped labels
+("10 V", "Circuit 1") are left alone. Two details are load-bearing:
+
+- **Pad, then trim.** The other order lets the padding reach straight back
+  across the options the trim just removed.
+- **Split rows into columns.** A question bank prints two columns, so one
+  height carries unrelated text on both sides of the page. Merging them made
+  the left column's prose trim a figure in the right column — measured at 58%
+  of a correct box before this was fixed.
+
+Measured on page 3 of the real bank: both leaking boxes go to zero prose, at a
+cost of 12% and 2% of box height, with all ten of Q37's labels retained.
+
+#### Crop or redraw — the teacher's choice
+
+Trimming makes crops good, not perfect: a crop still inherits its page, so a
+poor scan stays a poor scan and a box that was wrong to begin with stays wrong.
+So `settings.reference_figures` offers both:
+
+- `"crop"` (default): the figure as printed. Free, nothing invented.
+- `"redraw"`: the **crop** is handed to the image model as the thing to copy.
+
+The distinction that makes redraw safe here is that it is image-to-image. The
+pre-existing redraw path works from a written description, which is the one
+place in this app where a circuit can come out wired wrong with nothing able to
+check it. Shown the real figure instead, the model copies topology and values
+rather than inferring them, and clears up scan noise and any text the crop
+still caught.
+
+Redraws bill per image and are capped by `MAX_FIGURE_QUESTIONS`. Crucially they
+degrade to the original crop — when the budget is spent, when the admin tier is
+off, or when the call fails, the question keeps the figure it already had. A
+redraw must never be able to lose a figure.
 
 ### 3. Variety is enforced in code, not asked for in a prompt
 

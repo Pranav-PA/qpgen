@@ -3,7 +3,11 @@ import type { RasterMode } from "@/lib/api";
 import { MAX_FIGURE_QUESTIONS } from "@/lib/constants";
 import type { Strand } from "@/lib/curriculum";
 import type { BlueprintSection, Question } from "@/lib/types";
-import { generateQuestionImage, uploadQuestionImage } from "./images";
+import {
+  generateQuestionImage,
+  redrawFigureFromSource,
+  uploadQuestionImage,
+} from "./images";
 import type { FigureContext } from "./generate";
 
 /**
@@ -95,6 +99,55 @@ export async function renderFigureImage(opts: {
 }
 
 /**
+ * Redraws a reference crop as a clean figure and uploads the result.
+ *
+ * Never throws, and never loses the figure: when the redraw fails the caller
+ * keeps the crop it already had, which is a working diagram — unlike the
+ * text-spec path, where a failure means no figure at all. That difference is
+ * why this returns the original URL rather than an `imageFailed` flag alone.
+ */
+export async function redrawReferenceFigure(opts: {
+  userId: string;
+  paperId: string;
+  questionId: string;
+  sourceUrl: string;
+  raster: RasterMode;
+}): Promise<{ imageUrl: string; redrawn: boolean }> {
+  try {
+    const rendered = await redrawFigureFromSource({
+      imageUrl: opts.sourceUrl,
+      raster: opts.raster,
+    });
+    if (!rendered) return { imageUrl: opts.sourceUrl, redrawn: false };
+
+    const imageUrl = await uploadQuestionImage({
+      userId: opts.userId,
+      paperId: opts.paperId,
+      questionId: opts.questionId,
+      bytes: rendered.bytes,
+      mimeType: rendered.mimeType,
+    });
+    await logUsage({
+      user_id: opts.userId,
+      action: "generate_image",
+      usage: rendered.usage,
+      success: !!imageUrl,
+    });
+    return imageUrl
+      ? { imageUrl, redrawn: true }
+      : { imageUrl: opts.sourceUrl, redrawn: false };
+  } catch (err) {
+    await logUsage({
+      user_id: opts.userId,
+      action: "generate_image",
+      success: false,
+      error_message: err instanceof Error ? err.message : "unknown",
+    });
+    return { imageUrl: opts.sourceUrl, redrawn: false };
+  }
+}
+
+/**
  * The needs_review sentences a figure outcome adds, in the order every call
  * site already used before this was extracted — kept as one place so the
  * wording can't drift between generate-batch, regenerate and the AI editor.
@@ -111,9 +164,19 @@ export function figureReviewNotes(outcome: {
    * pipeline can read a diagram.
    */
   fromSource?: boolean;
+  /** Reference mode: the crop was redrawn by the image model rather than printed as-is. */
+  redrawnFromSource?: boolean;
+  /** Redraw was asked for but the paper had spent its image budget. */
+  redrawCapped?: boolean;
 }): string[] {
   return [
-    outcome.fromSource
+    outcome.redrawnFromSource
+      ? "This question's diagram was redrawn from the figure in your reference PDF. Compare it against the original — a redraw can copy a circuit wrongly, and nothing here can check that for you."
+      : null,
+    outcome.redrawCapped
+      ? `You asked for diagrams to be redrawn, but the paper had already used its limit of ${MAX_FIGURE_QUESTIONS} redraws, so this one is printed straight from your PDF instead.`
+      : null,
+    outcome.fromSource && !outcome.redrawnFromSource
       ? "This question's diagram was taken from your reference PDF. Check the crop caught the whole figure and is readable at print size."
       : null,
     outcome.hasImage

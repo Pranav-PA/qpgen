@@ -84,6 +84,127 @@ const CROP_RENDER_WIDTH = 2200;
 /** Cap on a crop's own width, so a page-wide figure is not shipped at full scale. */
 const MAX_CROP_WIDTH = 1000;
 
+/** One line of the page's text layer, positioned in normalised page space. */
+export interface TextLine {
+  text: string;
+  /** Vertical centre, 0 at the top of the page. */
+  y: number;
+  x0: number;
+  x1: number;
+}
+
+/**
+ * True for a line that belongs to the question, not to the figure.
+ *
+ * Figure labels are short and value-shaped: "10 V", "4 Ω", "A", "Circuit 1",
+ * "X", "l₁". Question text and answer options are sentences, or begin with an
+ * option marker. Two consecutive words of real letters is the cheapest
+ * separator that gets this right on a physics page, where almost every genuine
+ * label is a number with a unit.
+ */
+export function isQuestionProse(text: string): boolean {
+  const s = text.trim();
+  if (!s) return false;
+  if (/^\(?[a-dA-D][).]/.test(s)) return true;
+  return /[a-z]{4,}\s+[a-z]{3,}/i.test(s);
+}
+
+/**
+ * Shrinks a model-supplied figure box until it holds no question text.
+ *
+ * The model localises figures well but bounds them generously, and on the
+ * first live run that put the tail of the question's own sentence and the top
+ * row of the source's "(a)/(b)/(c)/(d)" options *inside* the printed figure —
+ * so the new paper showed the answer options twice, once in the crop. Tuning
+ * the prompt did not fix it; the boxes still enclosed the option markers.
+ *
+ * The PDF's text layer settles it without guessing: any prose line inside the
+ * box is either above the drawing or below it, so the box is closed in from
+ * whichever side it sits on. Figure labels are left alone, which is what keeps
+ * "10 V" and "Circuit 1" in the crop.
+ *
+ * A scanned PDF has no text layer and simply gets the box unchanged — nothing
+ * to trim with, and a slightly loose crop is still far better than no figure.
+ */
+export function trimBoxToFigure(
+  box: { x0: number; y0: number; x1: number; y1: number },
+  lines: TextLine[]
+): { x0: number; y0: number; x1: number; y1: number } {
+  const centre = (box.y0 + box.y1) / 2;
+  /** Half a line of clearance, so a trimmed edge does not clip a descender. */
+  const gap = 0.004;
+
+  let y0 = box.y0;
+  let y1 = box.y1;
+  for (const line of lines) {
+    if (line.y < box.y0 || line.y > box.y1) continue;
+    // Ignore text that sits entirely beside the box — a neighbouring column.
+    if (line.x1 < box.x0 || line.x0 > box.x1) continue;
+    if (!isQuestionProse(line.text)) continue;
+    if (line.y < centre) y0 = Math.max(y0, line.y + gap);
+    else y1 = Math.min(y1, line.y - gap);
+  }
+
+  // If trimming ate the box, the localisation was wrong about where the figure
+  // is; hand back the original and let the ink check and the teacher decide.
+  return y1 - y0 < 0.02 ? box : { ...box, y0, y1 };
+}
+
+/**
+ * Groups a pdfjs text content stream into lines in normalised page space.
+ * Exported so the trimming can be measured against a real PDF without a
+ * browser (see the bbox audit in the plan doc).
+ */
+export function toTextLines(
+  items: { str: string; transform: number[] }[],
+  pageWidth: number,
+  pageHeight: number
+): TextLine[] {
+  const rows = new Map<number, { text: string; x: number; y: number }[]>();
+  for (const it of items) {
+    if (!it.str || !it.str.trim()) continue;
+    const x = it.transform[4] / pageWidth;
+    // PDF user space is y-up from the bottom; boxes are y-down from the top.
+    const y = 1 - it.transform[5] / pageHeight;
+    // 0.5% of page height per row: tight enough to keep a figure label off the
+    // question line above it, loose enough to join one line's glyph runs.
+    const key = Math.round(y / 0.005);
+    const row = rows.get(key);
+    if (row) row.push({ text: it.str, x, y });
+    else rows.set(key, [{ text: it.str, x, y }]);
+  }
+
+  /*
+   * Rows are then split into column segments. A question bank prints two
+   * columns, so a single height carries unrelated text on both sides of the
+   * page — and merging them produced a "line" spanning the full width, which
+   * made the left column's prose trim a figure in the right column. This was
+   * measured: it cut a correct circuit box down by 58%.
+   */
+  const COLUMN_GAP = 0.06;
+  const out: TextLine[] = [];
+  for (const row of rows.values()) {
+    row.sort((a, b) => a.x - b.x);
+    let seg: typeof row = [];
+    const flush = () => {
+      if (seg.length === 0) return;
+      out.push({
+        text: seg.map((s) => s.text).join(" "),
+        y: seg[0].y,
+        x0: seg[0].x,
+        x1: seg[seg.length - 1].x,
+      });
+      seg = [];
+    };
+    for (const glyph of row) {
+      if (seg.length > 0 && glyph.x - seg[seg.length - 1].x > COLUMN_GAP) flush();
+      seg.push(glyph);
+    }
+    flush();
+  }
+  return out;
+}
+
 /**
  * Cuts each requested figure out of the source PDF.
  *
@@ -136,8 +257,27 @@ export async function cropReferenceFigures(
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     await page.render({ canvas, canvasContext: ctx, viewport }).promise;
 
+    // The page's own text layer, used to close each box in off any question
+    // text it enclosed. Absent on a scan, in which case boxes pass through.
+    let lines: TextLine[] = [];
+    try {
+      const content = await page.getTextContent();
+      lines = toTextLines(
+        content.items as { str: string; transform: number[] }[],
+        base.width,
+        base.height
+      );
+    } catch {
+      // No text layer; the model's box is all there is to go on.
+    }
+
     for (const req of pageRequests) {
-      const crop = cutOut(canvas, req.bbox);
+      /*
+       * Pad first, then trim. The other order lets the padding put back the
+       * very line the trim just removed — the box is closed in to just above
+       * the options, and padding then reaches back down across them.
+       */
+      const crop = cutOut(canvas, trimBoxToFigure(padBox(req.bbox), lines));
       if (crop) out.push({ item_id: req.item_id, data_url: crop });
     }
     page.cleanup();
@@ -147,16 +287,31 @@ export async function cropReferenceFigures(
   return out;
 }
 
+/** Grows a box by CROP_PADDING on every side, staying inside the page. */
+export function padBox(bbox: {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}): { x0: number; y0: number; x1: number; y1: number } {
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  return {
+    x0: clamp(bbox.x0 - CROP_PADDING),
+    y0: clamp(bbox.y0 - CROP_PADDING),
+    x1: clamp(bbox.x1 + CROP_PADDING),
+    y1: clamp(bbox.y1 + CROP_PADDING),
+  };
+}
+
 /** One crop, or null when the region is blank or degenerate. */
 function cutOut(
   source: HTMLCanvasElement,
   bbox: { x0: number; y0: number; x1: number; y1: number }
 ): string | null {
-  const clamp = (v: number) => Math.min(1, Math.max(0, v));
-  const x0 = clamp(bbox.x0 - CROP_PADDING) * source.width;
-  const y0 = clamp(bbox.y0 - CROP_PADDING) * source.height;
-  const x1 = clamp(bbox.x1 + CROP_PADDING) * source.width;
-  const y1 = clamp(bbox.y1 + CROP_PADDING) * source.height;
+  const x0 = bbox.x0 * source.width;
+  const y0 = bbox.y0 * source.height;
+  const x1 = bbox.x1 * source.width;
+  const y1 = bbox.y1 * source.height;
 
   const w = Math.round(x1 - x0);
   const h = Math.round(y1 - y0);

@@ -12,10 +12,16 @@ import {
 import {
   figureContextFor,
   figureReviewNotes,
+  redrawReferenceFigure,
   remainingFigureBudget,
   renderFigureImage,
 } from "@/lib/ai/figure-budget";
-import { isReferenceLed, type Paper, type Question } from "@/lib/types";
+import {
+  isReferenceLed,
+  referenceFigureMode,
+  type Paper,
+  type Question,
+} from "@/lib/types";
 
 export const maxDuration = 300;
 
@@ -147,6 +153,28 @@ export async function POST(
       (spec, i) => !!spec && images.raster !== "off" && !figureToRender[i]
     );
 
+    /*
+     * Redraw, when the teacher asked for it.
+     *
+     * Unlike every other image path this one cannot lose the figure: the crop
+     * already exists and is a working diagram, so a redraw that is refused by
+     * the budget, switched off by the admin tier, or that simply fails, leaves
+     * the question with the original. That is what makes it safe to ration
+     * after the crops rather than before them.
+     */
+    const wantsRedraw =
+      referenceLed && referenceFigureMode(paper.settings) === "redraw";
+    const figureToRedraw = figureFromSource.map((url) => {
+      if (!wantsRedraw || !url || images.raster === "off") return false;
+      if (figureBudget <= 0) return false;
+      figureBudget -= 1;
+      return true;
+    });
+    /** Asked for a redraw and did not get one because the paper's budget was spent. */
+    const redrawCapped = figureFromSource.map(
+      (url, i) => wantsRedraw && !!url && images.raster !== "off" && !figureToRedraw[i]
+    );
+
     const verification = await verifyQuestions({
       settings: paper.settings,
       questions: shuffled.map((q, i) => ({
@@ -184,7 +212,19 @@ export async function POST(
               raster: images.raster,
             })
           : { imageUrl: undefined, imageFailed: false };
-        const sourceUrl = figureFromSource[i] ?? undefined;
+        let sourceUrl = figureFromSource[i] ?? undefined;
+        let redrawn = false;
+        if (sourceUrl && figureToRedraw[i]) {
+          const result = await redrawReferenceFigure({
+            userId: user.id,
+            paperId: id,
+            questionId,
+            sourceUrl,
+            raster: images.raster,
+          });
+          sourceUrl = result.imageUrl;
+          redrawn = result.redrawn;
+        }
         const imageUrl = sourceUrl ?? renderedUrl;
 
         /*
@@ -203,6 +243,8 @@ export async function POST(
             imageFailed,
             capped: figureCapped[i],
             fromSource: !!sourceUrl,
+            redrawnFromSource: redrawn,
+            redrawCapped: redrawCapped[i],
           }),
         ].filter(Boolean);
 

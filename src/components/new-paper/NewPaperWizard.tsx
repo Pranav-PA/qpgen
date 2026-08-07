@@ -1363,6 +1363,7 @@ function StepReference({
       ...s,
       source_mode: on ? "reference" : undefined,
       reference_fidelity: on ? (s.reference_fidelity ?? "variant") : undefined,
+      reference_figures: on ? (s.reference_figures ?? "crop") : undefined,
       // The diagram controls are hidden in reference mode because the PDF's own
       // figures are used, so clear them rather than leave a stale count behind.
       ...(on ? { figure_mode: undefined, figure_questions: undefined } : {}),
@@ -1561,12 +1562,67 @@ function StepReference({
           replaced with an explanation of what will happen.
         */}
         {fromReference ? (
-          <p className="text-sm text-muted">
-            Diagrams come from your PDF. Where a question in it is printed with
-            a circuit, graph or figure, that figure is cut out of the page and
-            printed with the question — the real one, not a redrawn copy. Every
-            question that gets one is flagged for you to check the crop.
-          </p>
+          <>
+            <p className="text-sm text-muted mb-3">
+              Diagrams come from your PDF — where a question in it is printed
+              with a circuit, graph or figure, that figure comes across with the
+              question. Choose how it gets onto the page.
+            </p>
+            {images.raster === "off" ? (
+              <p className="text-sm text-muted">
+                Figures are cut straight out of your PDF. Redrawing them is
+                switched off by the administrator at the moment.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="reference-figures"
+                    className="mt-1"
+                    checked={(settings.reference_figures ?? "crop") === "crop"}
+                    onChange={() =>
+                      setSettings((s) => ({ ...s, reference_figures: "crop" }))
+                    }
+                  />
+                  <span>
+                    <strong>Use the figure from the PDF.</strong>
+                    <span className="block text-muted text-xs mt-0.5">
+                      Cut out of the page exactly as printed. Free, and nothing
+                      is invented — but it inherits the original: a poor scan
+                      stays a poor scan, and the cut can catch a stray line of
+                      the surrounding text.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="reference-figures"
+                    className="mt-1"
+                    checked={settings.reference_figures === "redraw"}
+                    onChange={() =>
+                      setSettings((s) => ({ ...s, reference_figures: "redraw" }))
+                    }
+                  />
+                  <span>
+                    <strong>Redraw it cleanly.</strong>
+                    <span className="block text-muted text-xs mt-0.5">
+                      The AI is shown the figure from your PDF and copies it as
+                      a clean exam diagram — same components, values and
+                      labels, without the scan artefacts or stray text. Billed
+                      per image, at most {MAX_FIGURE_QUESTIONS} per paper
+                      {figureModel && (
+                        <> (up to ≈ ${(figureCostEach * MAX_FIGURE_QUESTIONS).toFixed(2)})</>
+                      )}
+                      ; any beyond that keep the original. A copy can still be a
+                      bad copy, so check each one against your PDF.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
+          </>
         ) : images.raster === "off" ? (
           <p className="text-sm text-muted">
             Diagram questions are currently switched off by the administrator.
@@ -1707,6 +1763,16 @@ function StepReference({
               </>
             )}
           </dd>
+          {fromReference && (
+            <>
+              <dt className="text-muted">Diagrams</dt>
+              <dd>
+                {settings.reference_figures === "redraw" && images.raster !== "off"
+                  ? "Redrawn from your PDF's figures"
+                  : "Taken from your PDF as printed"}
+              </dd>
+            </>
+          )}
           <dt className="text-muted">Difficulty</dt>
           <dd>
             {fromReference ? (

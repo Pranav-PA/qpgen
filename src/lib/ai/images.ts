@@ -161,6 +161,64 @@ export async function editQuestionImage(opts: {
 }
 
 /**
+ * Redraws a figure cropped out of the teacher's reference PDF as a clean exam
+ * diagram, using the crop itself as the thing to copy.
+ *
+ * This is the safe form of "let the AI draw it". generateQuestionImage works
+ * from a written description, so whether the circuit comes out wired correctly
+ * depends entirely on the prose — and nothing downstream can read a diagram to
+ * check. Here the model is shown the real figure and asked to reproduce it, so
+ * the components, values and topology are copied rather than inferred. It also
+ * fixes what a crop cannot: scan noise, a clipped edge, and any stray line of
+ * surrounding text the bounding box caught.
+ *
+ * Still bills per image, and still forces needs_review — a copy can be a bad
+ * copy, and only the teacher can see that.
+ */
+export async function redrawFigureFromSource(opts: {
+  imageUrl: string;
+  raster: RasterMode;
+}): Promise<{ bytes: Buffer; mimeType: string; usage: Usage } | null> {
+  if (opts.raster === "off") return null;
+  if (isMockAi()) return mockQuestionImage();
+  const key = process.env.GOOGLE_API_KEY;
+  if (!key) return null;
+
+  const sourceRes = await fetch(opts.imageUrl);
+  if (!sourceRes.ok) {
+    throw new Error(
+      `Could not fetch the cropped reference figure to redraw it (HTTP ${sourceRes.status}).`
+    );
+  }
+  const sourceBytes = Buffer.from(await sourceRes.arrayBuffer());
+  const sourceMime = sourceRes.headers.get("content-type") || "image/jpeg";
+
+  const model = IMAGE_MODEL_FOR_TIER[opts.raster];
+  const prompt = [
+    "This image was cut out of a printed exam paper. Redraw the DIAGRAM it",
+    "contains as a clean figure for a new question paper.",
+    "",
+    "Copy it exactly. Every component, every value, every label and every",
+    "connection must match the original — same circuit topology, same",
+    "quantities, same letters marking the same points. You are reproducing this",
+    "diagram, not designing one: do not add a component, do not remove one, do",
+    "not relabel anything, and do not 'correct' anything that looks unusual.",
+    "",
+    "Leave out everything that is not the diagram: any sentence of question",
+    "text, any (a)/(b)/(c)/(d) answer options, any question number, page",
+    "header or year tag that the crop happened to include. Keep captions that",
+    "belong to the drawing itself, such as 'Circuit 1'.",
+    "",
+    STYLE_SUFFIX,
+  ].join("\n");
+
+  return callGeminiImageModel(model, key, [
+    { inlineData: { mimeType: sourceMime, data: sourceBytes.toString("base64") } },
+    { text: prompt },
+  ]);
+}
+
+/**
  * A valid 1x1 transparent PNG — the whole point is that it is real, decodable
  * image bytes so the upload/render/export pipeline runs unchanged in mock
  * mode, not a special case. Content doesn't matter here: MOCK_AI is about

@@ -13,12 +13,19 @@ import {
 import {
   figureContextFor,
   figureReviewNotes,
+  redrawReferenceFigure,
   remainingFigureBudget,
   renderFigureImage,
 } from "@/lib/ai/figure-budget";
 import { pickReplacementItem } from "@/lib/ai/reference-plan";
 import { archetypeKey } from "@/lib/ai/reference-extract";
-import { isReferenceLed, type Paper, type Question, type ReferenceItem } from "@/lib/types";
+import {
+  isReferenceLed,
+  referenceFigureMode,
+  type Paper,
+  type Question,
+  type ReferenceItem,
+} from "@/lib/types";
 
 export const maxDuration = 120;
 
@@ -149,7 +156,7 @@ export async function POST(
      * ceiling. Only the redraw fallback is rationed. See generate-batch, which
      * makes the same distinction for a whole batch.
      */
-    const sourceUrl = replacementItem?.figure?.image_url;
+    let sourceUrl = replacementItem?.figure?.image_url;
     const renderSpec = sourceUrl
       ? null
       : replacementItem
@@ -183,6 +190,25 @@ export async function POST(
             raster: images.raster,
           })
         : { imageUrl: undefined, imageFailed: false };
+
+    // The paper's figure choice applies to a replacement too — a redrawn paper
+    // should not acquire one raw crop every time a question is regenerated.
+    let redrawn = false;
+    const redrawWanted =
+      !!sourceUrl &&
+      referenceFigureMode(paper.settings) === "redraw" &&
+      images.raster !== "off";
+    if (redrawWanted && budget > 0) {
+      const result = await redrawReferenceFigure({
+        userId: user.id,
+        paperId: id,
+        questionId,
+        sourceUrl: sourceUrl!,
+        raster: images.raster,
+      });
+      sourceUrl = result.imageUrl;
+      redrawn = result.redrawn;
+    }
     const imageUrl = sourceUrl ?? renderedUrl;
 
     const unresolved = hasUnresolvedAnswer(raw);
@@ -196,6 +222,8 @@ export async function POST(
         imageFailed,
         capped,
         fromSource: !!sourceUrl,
+        redrawnFromSource: redrawn,
+        redrawCapped: redrawWanted && !redrawn && budget <= 0,
       }),
     ].filter(Boolean);
 
