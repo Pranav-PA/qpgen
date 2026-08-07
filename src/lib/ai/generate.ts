@@ -1,9 +1,10 @@
-import { hasOptions } from "@/lib/types";
+import { hasOptions, isReferenceLed, referenceFidelity } from "@/lib/types";
 import type {
   Difficulty,
   PaperSettings,
   Question,
   QuestionType,
+  ReferenceItem,
   ReferencePage,
 } from "@/lib/types";
 import { STRAND_LABELS, diagramTopicsByStrand, findSubject, type Strand } from "@/lib/curriculum";
@@ -14,6 +15,7 @@ import {
   editQuestionSystemPrompt,
   generationSystemPrompt,
   referenceAnalysisPrompt,
+  referenceGenerationSystemPrompt,
   verifierSystemPrompt,
 } from "./prompts";
 
@@ -40,6 +42,12 @@ export interface BatchSlot {
    * chapter/marks/type/format rules.
    */
   instruction?: string;
+  /**
+   * Reference mode only: the source question from the teacher's PDF that this
+   * slot is drawn from. Its presence is what switches generation from "write a
+   * question about this chapter" to "reuse or vary this specific question".
+   */
+  reference?: ReferenceItem;
 }
 
 interface RawQuestion {
@@ -351,6 +359,66 @@ function buildFigureAutoInstructions(opts: {
   return parts.join("\n");
 }
 
+/**
+ * Renders the source questions a reference-led batch is drawn from.
+ *
+ * Deliberately verbose per source — this is the entire subject matter of the
+ * questions being written, so a compact summary would be false economy. The
+ * source's own answer is passed through when the reference printed one (a
+ * question bank usually prints its answers in a separate solutions section, so
+ * it usually did not) and explicitly marked absent when it did not, because a
+ * model handed a blank field tends to assume the first option.
+ */
+function referenceCompositionBlock(slots: BatchSlot[]): string {
+  return slots
+    .map((slot, i) => {
+      const item = slot.reference;
+      const lines = [`SOURCE ${i + 1}`];
+      if (!item) {
+        // Only reachable when a blueprint prints more slots than the bank has
+        // questions; the part still has to be filled.
+        lines.push(
+          `topic: ${slot.chapter ?? "the reference paper"}`,
+          `required question type: ${slot.type}`,
+          `difficulty: ${slot.difficulty}`,
+          "question: (the reference had no further question for this slot — write one on the same topic, in the same style as the other sources in this batch)"
+        );
+        if (slot.marks !== undefined) lines.push(`worth ${slot.marks} mark(s)`);
+        return lines.join("\n");
+      }
+
+      lines.push(`topic: ${item.topic}`);
+      lines.push(`what it tests: ${item.archetype}`);
+      lines.push(`required question type: ${slot.type}`);
+      if (slot.type !== item.type) {
+        lines.push(
+          `NOTE: the source is a ${item.type} but this slot must print a ${slot.type} — recast the same concept into that format.`
+        );
+      }
+      lines.push(`difficulty: ${slot.difficulty}`);
+      if (slot.marks !== undefined) lines.push(`worth ${slot.marks} mark(s)`);
+      if (slot.section_name) lines.push(`for ${slot.section_name}`);
+      if (slot.subgroup_label) lines.push(`under "${slot.subgroup_label}"`);
+      lines.push(
+        slot.reference?.figure
+          ? "figure: this source has a diagram printed with it, and that same diagram is printed with your question — your question may refer to it."
+          : "figure: none — your question must be answerable from its text alone."
+      );
+      lines.push(`question: ${item.question_text}`);
+      if (item.options && item.options.length > 0) {
+        lines.push("options:");
+        item.options.forEach((o, oi) => lines.push(`  ${oi + 1}. ${o}`));
+      }
+      lines.push(
+        item.correct_answer
+          ? `answer printed in the source: ${item.correct_answer} (verify it before trusting it)`
+          : "answer printed in the source: none — work it out yourself."
+      );
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
 export async function generateQuestions(opts: {
   settings: PaperSettings;
   slots: BatchSlot[];
@@ -365,6 +433,10 @@ export async function generateQuestions(opts: {
   if (isMockAi()) return mockGenerate(opts.settings, opts.slots, opts.figures ?? false);
 
   const { settings, slots, avoid, styleNotes } = opts;
+  if (isReferenceLed(settings)) {
+    return generateFromReference({ settings, slots, avoid, provider: opts.provider });
+  }
+
   const autoFigures = opts.figures && settings.figure_mode === "auto";
   const curriculumSubject = findSubject(settings.curriculum);
   const anyFigureSlot = opts.figures && slots.some((s) => s.wants_figure);
@@ -431,6 +503,74 @@ export async function generateQuestions(opts: {
     throw new Error("The AI returned no questions.");
   }
   return { questions: parsed.questions.map(normalizeRaw), usage: res.usage };
+}
+
+/**
+ * Reference-led generation: one question per source question, nothing invented
+ * from the chapter list.
+ *
+ * Separate from the syllabus path rather than a set of conditionals inside it,
+ * because almost every instruction differs — the system prompt, what defines
+ * scope, where difficulty comes from, and who decides which questions carry a
+ * diagram. Threading four flags through the syllabus builder produced prompts
+ * that split the difference and questions that were neither.
+ */
+async function generateFromReference(opts: {
+  settings: PaperSettings;
+  slots: BatchSlot[];
+  avoid: string[];
+  provider: Provider;
+}): Promise<{ questions: RawQuestion[]; usage: Usage }> {
+  const { settings, slots, avoid } = opts;
+  const fidelity = referenceFidelity(settings);
+
+  const userParts = [
+    `Produce exactly ${slots.length} question(s) — one for each SOURCE below, in the same order.`,
+    `- Subject: ${settings.subject}`,
+    `- Paper: ${settings.exam_type === "Custom" ? settings.exam_type_custom : settings.exam_type}`,
+    `- Mode: ${fidelity === "reuse" ? "REUSE the source questions" : "write VARIANTS of the source questions"}`,
+    "",
+    referenceCompositionBlock(slots),
+    /*
+     * Figures are cropped out of the teacher's PDF (or, where the crop failed,
+     * redrawn from a description the extractor already wrote). Either way the
+     * spec is settled before this call, so a figure_spec written here would be
+     * silently discarded — say so rather than let the model spend output on it.
+     */
+    '\nSet "figure_spec" to null on every question. Diagrams for this paper come from the teacher\'s reference document and are attached automatically — you never describe or draw one.',
+  ];
+
+  if (settings.extra_instructions) {
+    userParts.push(teacherInstructionBlock(settings.extra_instructions));
+  }
+  const slotNotes = slotInstructionsBlock(slots);
+  if (slotNotes) userParts.push(slotNotes);
+  if (avoid.length > 0) {
+    userParts.push(
+      `\nAlready on this paper — do NOT produce anything that duplicates or trivially rephrases these:\n${avoid
+        .map((a, i) => `${i + 1}. ${a}`)
+        .join("\n")}`
+    );
+  }
+
+  const res = await runAi(opts.provider, {
+    purpose: "generate",
+    system: referenceGenerationSystemPrompt(settings, fidelity),
+    user: userParts.join("\n"),
+    schema: { name: questionsSchema.name, schema: questionsSchema.schema },
+  });
+
+  const parsed = parseJson<{ questions: RawQuestion[] }>(res.text);
+  if (!Array.isArray(parsed?.questions) || parsed.questions.length === 0) {
+    throw new Error("The AI returned no questions.");
+  }
+  // figure_spec is stripped rather than trusted: the figure a reference-mode
+  // question carries is decided by its source, and a spec surviving to the
+  // route would bill for an image nobody asked for.
+  return {
+    questions: parsed.questions.map((q) => ({ ...normalizeRaw(q), figure_spec: null })),
+    usage: res.usage,
+  };
 }
 
 /**
@@ -563,7 +703,7 @@ function mockRevise(
  * read "(A) A) Copper". Strip a leading label, but only when every option has
  * one, so legitimate text like "A) is correct because…" is never mangled.
  */
-function stripOptionLabels(options: string[] | null): string[] | null {
+export function stripOptionLabels(options: string[] | null): string[] | null {
   if (!options || options.length === 0) return options;
   const label = /^\s*\(?\s*([A-Da-d])\s*[).:\]]\s+/;
   if (!options.every((o) => label.test(o))) return options;
@@ -595,6 +735,9 @@ function normalizeRaw(raw: RawQuestion): RawQuestion {
 function parseJson<T>(text: string): T | null {
   return repairMisescapedLatex(parseJsonRaw<T>(text));
 }
+
+/** Same parse+LaTeX-repair path, for the reference extractor in its own module. */
+export const parseAiJson = parseJson;
 
 function parseJsonRaw<T>(text: string): T | null {
   const trimmed = text.trim();
@@ -949,7 +1092,27 @@ function mockGenerate(
   const defaultChapter = settings.chapters[0] ?? "Sample Chapter";
   const questions: RawQuestion[] = slots.map((slot, i) => {
     const chapter = slot.chapter ?? defaultChapter;
-    const figure_spec = mockFigureSpec(settings, slot, i, figuresOn);
+    // Reference mode never asks the model for a figure — the diagram is taken
+    // from the source PDF by the route, so a spec here would be discarded.
+    const figure_spec = slot.reference
+      ? null
+      : mockFigureSpec(settings, slot, i, figuresOn);
+
+    if (slot.reference) {
+      const src = slot.reference;
+      const verb = referenceFidelity(settings) === "reuse" ? "REUSED" : "VARIANT OF";
+      return {
+        type: slot.type,
+        difficulty: slot.difficulty,
+        chapter,
+        question_text: `[MOCK ${verb} source ${src.ref_label ?? src.id} — ${src.archetype}] ${src.question_text}`,
+        options: src.options ?? null,
+        correct_answer: src.correct_answer || "A",
+        solution: `[MOCK] Worked from the source question on "${src.topic}".`,
+        figure_spec,
+      };
+    }
+
     if (slot.type === "numerical") {
       return {
         type: "numerical",

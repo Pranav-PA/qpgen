@@ -103,8 +103,19 @@ export function figureReviewNotes(outcome: {
   hasImage: boolean;
   imageFailed: boolean;
   capped: boolean;
+  /**
+   * Reference mode: the diagram was cut out of the teacher's own PDF rather
+   * than drawn. Nothing was invented, so the note asks about the crop (did it
+   * catch the whole figure, is it legible at print size) rather than about
+   * accuracy — but it still goes to review, because no verifier in this
+   * pipeline can read a diagram.
+   */
+  fromSource?: boolean;
 }): string[] {
   return [
+    outcome.fromSource
+      ? "This question's diagram was taken from your reference PDF. Check the crop caught the whole figure and is readable at print size."
+      : null,
     outcome.hasImage
       ? "This question has an AI-generated diagram. Check it is accurate and readable before distributing."
       : null,

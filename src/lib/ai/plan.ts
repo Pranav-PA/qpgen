@@ -7,7 +7,9 @@ import type {
   PaperSettings,
   Question,
   QuestionType,
+  ReferenceBank,
 } from "@/lib/types";
+import { referencePlan } from "./reference-plan";
 import type { BatchSlot } from "./generate";
 
 function subGroupLabelAt(s: BlueprintSection, offset: number): string | undefined {
@@ -115,7 +117,20 @@ function applyFigurePolicy(slots: BatchSlot[], settings: PaperSettings): BatchSl
   return distributeFigureSlots(slots, settings.figure_questions ?? 0);
 }
 
-export function fullPlan(settings: PaperSettings): BatchSlot[] {
+export function fullPlan(
+  settings: PaperSettings,
+  bank?: ReferenceBank | null
+): BatchSlot[] {
+  /*
+   * A reference-led paper takes its questions, types and difficulties from the
+   * bank, so it bypasses everything below — including the figure policy, since
+   * which questions carry a diagram is decided by which source questions had
+   * one printed with them, not by a count the teacher chose.
+   */
+  if (settings.source_mode === "reference" && bank) {
+    return referencePlan(settings, bank);
+  }
+
   if (settings.mode === "blueprint" && settings.blueprint) {
     return applyFigurePolicy(blueprintPlan(settings), settings);
   }
@@ -160,10 +175,56 @@ export function fullPlan(settings: PaperSettings): BatchSlot[] {
   );
 }
 
-/** Slots for the next batch given how many questions already exist. */
-export function nextBatchSlots(settings: PaperSettings, existing: number): BatchSlot[] {
-  const plan = fullPlan(settings);
-  return plan.slice(existing, Math.min(existing + GENERATION_BATCH_SIZE, plan.length));
+/**
+ * Which plan slots the paper's existing questions have NOT filled.
+ *
+ * This used to be `plan.slice(existing.length)` — the plan indexed purely by
+ * how many questions had been generated. That is right while a paper is being
+ * generated straight through, and wrong the moment a teacher deletes a
+ * question on the review screen and presses "Generate remaining": the count
+ * drops, so the next batch is taken from the END of the plan rather than from
+ * the slot that was vacated. On a blueprint paper the replacement then arrives
+ * carrying a different part's section, marks and chapter, leaving one part
+ * short and another over.
+ *
+ * Matching by position within each part instead is identical to the old
+ * behaviour when nothing has been deleted — the plan walks parts in order and
+ * questions are generated in that same order — and correct when something has.
+ */
+function unfilledSlots(plan: BatchSlot[], existing: Question[]): BatchSlot[] {
+  // A simple (non-blueprint) paper has one flat run of interchangeable slots,
+  // so position within the paper is the only thing to match on.
+  if (!plan.some((s) => s.section_id)) return plan.slice(existing.length);
+
+  const filledPerSection = new Map<string, number>();
+  for (const q of existing) {
+    const key = q.section_id ?? "";
+    filledPerSection.set(key, (filledPerSection.get(key) ?? 0) + 1);
+  }
+
+  const out: BatchSlot[] = [];
+  for (const slot of plan) {
+    const key = slot.section_id ?? "";
+    const filled = filledPerSection.get(key) ?? 0;
+    if (filled > 0) {
+      filledPerSection.set(key, filled - 1);
+      continue;
+    }
+    out.push(slot);
+  }
+  return out;
+}
+
+/** Slots for the next batch, given the questions the paper already has. */
+export function nextBatchSlots(
+  settings: PaperSettings,
+  existing: Question[],
+  bank?: ReferenceBank | null
+): BatchSlot[] {
+  return unfilledSlots(fullPlan(settings, bank), existing).slice(
+    0,
+    GENERATION_BATCH_SIZE
+  );
 }
 
 /** Compact avoid-list entries from existing questions. */

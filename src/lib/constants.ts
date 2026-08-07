@@ -10,6 +10,29 @@ export const MAX_BLUEPRINT_PAGES = 4;
 export const GENERATION_BATCH_SIZE = 6;
 export const MAX_REFERENCE_PDF_PAGES = 10;
 export const MAX_REFERENCE_PDF_MB = 20;
+
+/**
+ * Reference-led generation (settings.source_mode === "reference").
+ *
+ * Extraction runs one vision call per page rather than one call over all of
+ * them: a single request returning a hundred-plus questions is both a very
+ * large output and markedly less reliable, and per-page calls parallelise.
+ * Concurrency is bounded so a 10-page bank cannot fire ten simultaneous
+ * requests at the provider's rate limit.
+ */
+export const REFERENCE_EXTRACTION_CONCURRENCY = 4;
+/** Per page. A dense two-column question bank prints ~18; beyond that it is OCR noise. */
+export const MAX_REFERENCE_ITEMS_PER_PAGE = 25;
+/**
+ * Crops taken out of the source PDF are free and exact, so they are preferred
+ * over redrawing a figure — but a crop still has to be worth printing. A box
+ * smaller than this fraction of the page is a stray glyph, not a diagram.
+ */
+export const MIN_FIGURE_CROP_AREA = 0.004;
+/** A crop covering most of the page is a failed localisation, not a figure. */
+export const MAX_FIGURE_CROP_AREA = 0.6;
+/** Fraction of non-white pixels below which a crop is treated as blank. */
+export const MIN_FIGURE_CROP_INK = 0.005;
 export const MAX_LOGO_MB = 2;
 /** Each image is a real per-image bill (see lib/ai/images.ts), not a token cost — bounded so a paper's image spend has a hard ceiling. */
 export const MAX_FIGURE_QUESTIONS = 10;
