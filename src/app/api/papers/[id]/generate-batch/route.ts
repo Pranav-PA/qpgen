@@ -94,17 +94,6 @@ export async function POST(
      */
     const shuffled = gen.questions.slice(0, slots.length).map(shuffleMcqOptions);
 
-    const verification = await verifyQuestions({
-      settings: paper.settings,
-      questions: shuffled.map((q) => ({
-        ...q,
-        options: q.options ?? undefined,
-        has_figure: !!q.figure_spec,
-      })),
-      provider,
-    });
-    await logUsage({ user_id: user.id, action: "verify_batch", usage: verification.usage });
-
     /*
      * Image budget for this batch.
      *
@@ -114,6 +103,14 @@ export async function POST(
      * instead: count what the paper already has and only honour that many more
      * figure_specs, in order. "fixed" mode is already bounded by the slot plan,
      * but the same cap applies harmlessly.
+     *
+     * Settled BEFORE verification, not after: the verifier's self-containment
+     * check needs to know whether a diagram will actually be printed with each
+     * question. Deriving that from figure_spec — which is what this did — is
+     * right for a syllabus paper and always false for a reference-led one,
+     * whose figures come from a crop of the source page rather than from a spec
+     * the model wrote. Every reference question carrying a diagram was
+     * therefore failed for referring to a figure that "is not provided".
      */
     let figureBudget = remainingFigureBudget(existing);
 
@@ -149,6 +146,19 @@ export async function POST(
     const figureCapped = wantsRender.map(
       (spec, i) => !!spec && images.raster !== "off" && !figureToRender[i]
     );
+
+    const verification = await verifyQuestions({
+      settings: paper.settings,
+      questions: shuffled.map((q, i) => ({
+        ...q,
+        options: q.options ?? undefined,
+        // What the printed question will actually carry: a crop from the
+        // teacher's PDF, or a figure this batch is about to render.
+        has_figure: !!figureFromSource[i] || !!figureToRender[i],
+      })),
+      provider,
+    });
+    await logUsage({ user_id: user.id, action: "verify_batch", usage: verification.usage });
 
     const newQuestions: Question[] = await Promise.all(
       shuffled.map(async (raw, i) => {

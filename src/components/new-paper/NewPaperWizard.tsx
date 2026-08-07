@@ -394,15 +394,13 @@ export default function NewPaperWizard({
         });
         const refBody = await refRes.json().catch(() => ({}));
         if (!refRes.ok) {
-          throw Object.assign(
-            new Error(
-              refBody.error ||
-                "Reading the reference PDF failed. You can retry, or generate without it."
-            ),
-            // No questions exist yet, so there is nothing to review — but the
-            // paper does, and offering it lets the teacher retry from there
-            // rather than start the wizard again.
-            { paperId }
+          // No paperId: the reference pass runs before any question exists, so
+          // the paper it would link to is empty and the review screen has
+          // nothing to show. The error card falls back to "Back to setup",
+          // which is the only thing that actually helps here.
+          throw new Error(
+            refBody.error ||
+              "Reading the reference PDF failed. You can retry, or generate without it."
           );
         }
 

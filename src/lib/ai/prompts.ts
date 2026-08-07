@@ -267,7 +267,11 @@ For each question:
 
 Figures. A question that refers to "the circuit shown", "the graph shown", "the figure", or that cannot be answered from its text alone, has a figure printed with it:
 - has_figure: true for exactly those questions, false otherwise. Do not mark a question as having a figure because the page has one somewhere — only when THAT question's own figure is printed with it.
-- figure_bbox: the box tightly containing that figure, as four integers [ymin, xmin, ymax, xmax] on a 0–1000 scale over the whole page image, top-left origin. Include the figure's own labels and component values, exclude the question text and the options. Accuracy matters — the box is cropped out of the page and printed on the new paper.
+- figure_bbox: the box TIGHTLY containing that figure, as four integers [ymin, xmin, ymax, xmax] on a 0–1000 scale over the whole page image, top-left origin. This box is cut out of the page verbatim and printed on the new paper, so be exact:
+  * Include only the drawing itself and the labels attached to it — component values, terminal letters, axis labels, "Circuit 1"-style captions directly under the drawing.
+  * The box must contain NO prose. Not one line of the question's own sentence above it, and not one row of the (a)/(b)/(c)/(d) options below it. Those are reprinted around the figure already, so any that leak into the crop appear twice on the new paper and give the game away.
+  * Start the box at the first pixel row BELOW the last line of question text, and end it at the last pixel row ABOVE the first line of options. When in doubt, make the box smaller — a slightly cropped figure is fixable by eye, a figure with a stray line of text baked into it is not.
+  * On a two-column page, keep the box inside its own column.
 - figure_description: a complete plain-text description of the figure — every component, every value, every label, and how they are arranged or connected. Someone who cannot see the page must be able to draw it correctly from this alone. Used only if the crop fails, so write it properly.
 Set figure_bbox to [0,0,0,0] and figure_description to "" for questions with no figure.
 

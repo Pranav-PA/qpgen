@@ -68,8 +68,17 @@ export interface FigureCrop {
   data_url: string;
 }
 
-/** Padding around the model's box, as a fraction of page size. */
-const CROP_PADDING = 0.012;
+/**
+ * Padding around the model's box, as a fraction of page size.
+ *
+ * Small on purpose. The failure this guards against is not a figure with its
+ * edges shaved — it is a crop that swallows the line of question text above the
+ * diagram and the first row of the source's own options below it, both of which
+ * then print on the new paper underneath the question that already says the
+ * same thing. Given a box that is slightly wrong, too tight is recoverable by
+ * eye and too loose is not.
+ */
+const CROP_PADDING = 0.003;
 /** Crops are re-rendered well above the ~1200px used for reading the page. */
 const CROP_RENDER_WIDTH = 2200;
 /** Cap on a crop's own width, so a page-wide figure is not shipped at full scale. */

@@ -121,8 +121,15 @@ async function buildBank(opts: {
       success: false,
       error_message: message,
     });
+    /*
+     * Deliberately does not offer "retry from the paper page": extraction runs
+     * once, before any question exists, and the review screen has no control
+     * that can re-run it. Pointing a teacher at a paper with nothing in it —
+     * which is what the earlier wording did — wastes their time looking for a
+     * button that was never built.
+     */
     return jsonError(
-      `Reading the questions out of your reference PDF failed (${message}). You can retry from the paper page.`,
+      `Reading the questions out of your reference PDF failed (${message}). Nothing was generated, so start again from the new-paper screen.`,
       502
     );
   }
