@@ -205,6 +205,11 @@ export async function POST(
         questionId,
         sourceUrl: sourceUrl!,
         raster: images.raster,
+        context: [
+          raw.question_text,
+          replacementItem?.question_text,
+          replacementItem?.figure?.spec,
+        ],
       });
       sourceUrl = result.imageUrl;
       redrawn = result.redrawn;

@@ -195,7 +195,27 @@ export default function NewPaperWizard({
   const wantsFigures = figuresOn(settings);
 
   function applyLastPaper() {
-    if (lastSettings) setSettings(lastSettings);
+    /*
+     * Reference mode is a property of a specific uploaded PDF, not of a paper's
+     * shape, and reusing a setup copies no PDF. Carrying source_mode over left
+     * step 1 disabled with "switch it off on the last step" — while the control
+     * that switches it off only exists once a PDF is attached. Drop it, and
+     * with it the chapter list, which for a reference paper is the previous
+     * PDF's sub-topics rather than anything the teacher chose.
+     */
+    if (lastSettings) {
+      setSettings(
+        lastSettings.source_mode === "reference"
+          ? {
+              ...lastSettings,
+              source_mode: undefined,
+              reference_fidelity: undefined,
+              reference_figures: undefined,
+              chapters: [],
+            }
+          : lastSettings
+      );
+    }
     if (lastInstitution) {
       setInst(lastInstitution);
       setMaxMarksTouched(true);

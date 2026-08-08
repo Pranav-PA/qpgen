@@ -428,12 +428,22 @@ export default function PaperReview({ initialPaper }: { initialPaper: Paper }) {
             }
             onResolveFlag={resolveFlag}
             onDelete={removeQuestion}
-            onReplaced={(next, originalId) => {
+            /*
+             * The regenerate/edit routes persist their own replacement
+             * server-side, so this used to clear `dirty` outright — which also
+             * threw away the fact that OTHER questions had unsaved edits. Fix
+             * question 5's wording, regenerate question 12, and the screen
+             * said "All changes saved" while question 5's edit lived only in
+             * the tab, with the unload guard disarmed.
+             *
+             * The replacement itself is already saved, so nothing needs
+             * marking dirty here; `dirty` is simply left as it was.
+             */
+            onReplaced={(next, originalId) =>
               setQuestions((prev) =>
                 prev.map((x) => (x.id === originalId ? next : x))
-              );
-              setDirty(false);
-            }}
+              )
+            }
             onMove={(offset, delta) => moveWithinGroup(groupIndex, offset, delta)}
             onAdd={() => addCustomQuestion(group.section)}
           />

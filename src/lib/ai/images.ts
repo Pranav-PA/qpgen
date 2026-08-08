@@ -26,6 +26,37 @@ const STYLE_SUFFIX = [
   "described below — no extra arrows, no extra labels, no decoration.",
 ].join(" ");
 
+/**
+ * The same style, minus the monochrome rule, for figures whose meaning IS the
+ * colour.
+ *
+ * A resistor colour-code question redrawn under STYLE_SUFFIX came back as four
+ * identical black bands: the diagram's entire content destroyed, and worse than
+ * the crop it replaced. "No color" is right for a circuit and wrong for the one
+ * topic where colour carries the physics.
+ */
+const STYLE_SUFFIX_COLOUR = [
+  "Clean, minimal, textbook/exam-paper style line diagram on a pure flat white",
+  "background: no shading, no photographic texture, no paper or page",
+  "background, no scenery. Reproduce every colour of the original EXACTLY —",
+  "the colours are what the question is about, so a band or region drawn in the",
+  "wrong colour makes the question wrong. Use the standard symbol conventions",
+  "for the subject. Draw only what is in the original — no extra arrows, no",
+  "extra labels, no decoration.",
+].join(" ");
+
+/**
+ * True when a figure's colours carry meaning and must survive a redraw.
+ *
+ * Deliberately blunt: any mention of colour at all in the question or in the
+ * extractor's description of the figure. A false positive costs nothing — the
+ * redraw simply keeps the original's colours, which is what a faithful copy
+ * does anyway — while a false negative silently destroys the diagram.
+ */
+export function figureColourMatters(...text: (string | undefined)[]): boolean {
+  return /colou?r/i.test(text.filter(Boolean).join(" "));
+}
+
 interface GeminiImagePart {
   inlineData?: { mimeType?: string; data?: string };
 }
@@ -178,6 +209,8 @@ export async function editQuestionImage(opts: {
 export async function redrawFigureFromSource(opts: {
   imageUrl: string;
   raster: RasterMode;
+  /** Keep the original's colours — see figureColourMatters. */
+  preserveColour?: boolean;
 }): Promise<{ bytes: Buffer; mimeType: string; usage: Usage } | null> {
   if (opts.raster === "off") return null;
   if (isMockAi()) return mockQuestionImage();
@@ -209,7 +242,7 @@ export async function redrawFigureFromSource(opts: {
     "header or year tag that the crop happened to include. Keep captions that",
     "belong to the drawing itself, such as 'Circuit 1'.",
     "",
-    STYLE_SUFFIX,
+    opts.preserveColour ? STYLE_SUFFIX_COLOUR : STYLE_SUFFIX,
   ].join("\n");
 
   return callGeminiImageModel(model, key, [

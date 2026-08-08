@@ -55,7 +55,6 @@ export function subHeadingFor(
  */
 function groupByChapter(questions: Question[]): SectionGroup[] {
   const groups: SectionGroup[] = [];
-  let running = 1;
   for (const q of questions) {
     const heading = q.chapter?.trim() || null;
     const last = groups[groups.length - 1];
@@ -63,14 +62,8 @@ function groupByChapter(questions: Question[]): SectionGroup[] {
       last.questions.push(q);
       continue;
     }
-    groups.push({
-      section: null,
-      heading,
-      instruction: null,
-      questions: [q],
-      startIndex: running,
-    });
-    running = 1; // recomputed below once every group's size is known
+    // startIndex is filled in below, once every group's size is known.
+    groups.push({ section: null, heading, instruction: null, questions: [q], startIndex: 1 });
   }
   let index = 1;
   for (const g of groups) {

@@ -221,6 +221,12 @@ export async function POST(
             questionId,
             sourceUrl,
             raster: images.raster,
+            // A colour-code question's diagram is meaningless in monochrome.
+            context: [
+              raw.question_text,
+              slot?.reference?.question_text,
+              slot?.reference?.figure?.spec,
+            ],
           });
           sourceUrl = result.imageUrl;
           redrawn = result.redrawn;

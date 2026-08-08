@@ -4,6 +4,7 @@ import { MAX_FIGURE_QUESTIONS } from "@/lib/constants";
 import type { Strand } from "@/lib/curriculum";
 import type { BlueprintSection, Question } from "@/lib/types";
 import {
+  figureColourMatters,
   generateQuestionImage,
   redrawFigureFromSource,
   uploadQuestionImage,
@@ -112,11 +113,14 @@ export async function redrawReferenceFigure(opts: {
   questionId: string;
   sourceUrl: string;
   raster: RasterMode;
+  /** Question text and figure description, to decide whether colour matters. */
+  context?: (string | undefined)[];
 }): Promise<{ imageUrl: string; redrawn: boolean }> {
   try {
     const rendered = await redrawFigureFromSource({
       imageUrl: opts.sourceUrl,
       raster: opts.raster,
+      preserveColour: figureColourMatters(...(opts.context ?? [])),
     });
     if (!rendered) return { imageUrl: opts.sourceUrl, redrawn: false };
 
