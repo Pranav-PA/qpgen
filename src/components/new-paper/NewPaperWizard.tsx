@@ -1364,6 +1364,10 @@ function StepReference({
       source_mode: on ? "reference" : undefined,
       reference_fidelity: on ? (s.reference_fidelity ?? "variant") : undefined,
       reference_figures: on ? (s.reference_figures ?? "crop") : undefined,
+      // A reference bank is short objective questions, dozens of them; two
+      // columns is what the source itself prints and it roughly halves the
+      // page count. Still a plain default — the layout buttons below override it.
+      layout_columns: on ? (s.layout_columns ?? 2) : s.layout_columns,
       // The diagram controls are hidden in reference mode because the PDF's own
       // figures are used, so clear them rather than leave a stale count behind.
       ...(on ? { figure_mode: undefined, figure_questions: undefined } : {}),

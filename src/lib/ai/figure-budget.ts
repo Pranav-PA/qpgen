@@ -177,7 +177,7 @@ export function figureReviewNotes(outcome: {
       ? `You asked for diagrams to be redrawn, but the paper had already used its limit of ${MAX_FIGURE_QUESTIONS} redraws, so this one is printed straight from your PDF instead.`
       : null,
     outcome.fromSource && !outcome.redrawnFromSource
-      ? "This question's diagram was taken from your reference PDF. Check the crop caught the whole figure and is readable at print size."
+      ? "This question's diagram was taken from your reference PDF. Check the crop caught the whole figure, is readable at print size, and that its values and labels match the question as written."
       : null,
     outcome.hasImage
       ? "This question has an AI-generated diagram. Check it is accurate and readable before distributing."

@@ -150,6 +150,33 @@ In reference mode each question's `type` and `difficulty` come from its source
 item. The easy/medium/hard mix and the question-type dropdown are disabled in
 the wizard with an explanation rather than silently ignored.
 
+## Printed output
+
+Judged against a paper written by hand from the same PDF, the export had four
+faults, all found by rendering a real reference-led paper through
+`questionPaperHtml` and looking at it.
+
+- **A varied question can contradict its own figure.** The worst of them, and
+  invisible to every check in the pipeline. A live paper asked about a resistor
+  banded "Red, Red, Orange, Silver" above a figure — the teacher's original,
+  copied across unchanged — still banded Yellow-Violet-Brown-Gold. The verifier
+  reads text and cannot see a diagram, so nothing caught it. Variant mode now
+  carves out an exception: a source that carries a figure is reproduced as
+  printed, never varied, because the figure pins every value in it.
+- **No structure.** A reference paper has no blueprint, so 45 questions printed
+  as one undifferentiated run. Its questions each carry a real topic — the
+  sub-topic heading the source printed them under — so the paper is now grouped
+  under those headings, and `reference-plan.ts` orders the selected questions so
+  the topics run together. Selection still round-robins for variety; only the
+  printing order changed.
+- **The scope line ran to six lines.** It printed all two dozen sub-topics under
+  the exam title, eating a quarter of page one. Capped at three plus a count.
+- **`[4 marks]` forty-five times.** Suppressed when every question on the paper
+  is worth the same; the letterhead total and the instructions already say it.
+
+Reference mode also defaults to a two-column page, which is what the source
+itself prints and roughly halves the page count.
+
 ## Bugs fixed alongside
 
 - **`PATCH /api/papers/[id]` caps `questions` at 60** while a blueprint paper

@@ -153,6 +153,21 @@ h2.sec { font-size: 13pt; margin: 14px 0 6px; }
 .katex-display { margin: 0.3em 0; }
 `;
 
+/**
+ * The chapter list under the exam title, kept to one line.
+ *
+ * Printed in full this ran to six lines and a quarter of page one on a
+ * reference-led paper, whose "chapters" are the two dozen sub-topic headings
+ * read out of the source. A board paper with sixteen chapters is no better.
+ * The scope line is orientation, not a table of contents — and each part of
+ * the paper now prints its own topic heading above its questions anyway.
+ */
+function scopeLine(chapters: string[], max = 3): string {
+  const list = chapters.filter((c) => c.trim());
+  if (list.length <= max) return list.join(", ");
+  return `${list.slice(0, max).join(", ")} +${list.length - max} more`;
+}
+
 function fmtDuration(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
@@ -200,7 +215,9 @@ function letterheadHtml(
     <h1 class="inst">${escapeHtml(i.name)}</h1>
     ${i.address ? `<p class="addr">${escapeHtml(i.address)}</p>` : ""}
     <p class="examtitle">${escapeHtml(i.exam_title)}${keyLabel ? " — ANSWER KEY" : ""}</p>
-    <p class="scope">${escapeHtml(paper.subject)} · ${escapeHtml(paper.chapters.join(", "))}</p>
+    <p class="scope">${escapeHtml(paper.subject)}${
+      scopeLine(paper.chapters) ? ` · ${escapeHtml(scopeLine(paper.chapters))}` : ""
+    }</p>
     <div class="meta">${meta.map((m) => `<span>${m}</span>`).join("")}</div>
   </header>`;
 }
@@ -210,7 +227,9 @@ function questionHtml(
   index: number,
   figureDataUris: Map<string, string>,
   failedFigureIds: Set<string>,
-  pageColumns: 1 | 2
+  pageColumns: 1 | 2,
+  /** False when every question on the paper is worth the same. */
+  showMarks: boolean
 ): string {
   const showOptions =
     hasOptions(q.type) && Array.isArray(q.options) && q.options.length > 0;
@@ -266,7 +285,11 @@ function questionHtml(
   return `<div class="q">
     <div class="stem">
       <span class="num">Q${index + 1}.</span>
-      <span>${mathHtml(q.question_text)} <span class="marks">[${q.marks} mark${q.marks === 1 ? "" : "s"}]</span></span>
+      <span>${mathHtml(q.question_text)}${
+        showMarks
+          ? ` <span class="marks">[${q.marks} mark${q.marks === 1 ? "" : "s"}]</span>`
+          : ""
+      }</span>
     </div>
     ${figure}
     ${opts}
@@ -321,6 +344,14 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
 
   const pageColumns = paper.settings.layout_columns === 2 ? 2 : 1;
 
+  /*
+   * A per-question "[4 marks]" tag is information only when the paper's marks
+   * vary. On a 45-question paper where every question is worth the same it is
+   * the same five characters printed 45 times, competing with the question
+   * text; the letterhead's total and the instructions already say it once.
+   */
+  const marksVary = new Set(paper.questions.map((q) => q.marks)).size > 1;
+
   const groups = groupBySection(paper)
     .map((g) => {
       const head = g.heading
@@ -336,7 +367,10 @@ export async function questionPaperHtml(paper: Paper): Promise<string> {
                 sub.marks ? `<span class="submarks">${escapeHtml(sub.marks)}</span>` : ""
               }</div>`
             : "";
-          return subHead + questionHtml(q, g.startIndex - 1 + i, figureDataUris, failedFigureIds, pageColumns);
+          return (
+            subHead +
+            questionHtml(q, g.startIndex - 1 + i, figureDataUris, failedFigureIds, pageColumns, marksVary)
+          );
         })
         .join("");
       return head + qs;
@@ -375,6 +409,8 @@ export async function answerKeyHtml(paper: Paper): Promise<string> {
           .join("")}</div>`
       : `<p class="help-note">This paper is entirely descriptive — see the worked solutions below.</p>`;
 
+  const marksVary = new Set(paper.questions.map((q) => q.marks)).size > 1;
+
   const solutions = groups
     .map((g) => {
       const head = g.heading
@@ -383,7 +419,11 @@ export async function answerKeyHtml(paper: Paper): Promise<string> {
       const items = g.questions
         .map(
           (q, i) => `<div class="sol">
-            <div class="head">Q${g.startIndex + i} — Answer: ${mathHtml(q.correct_answer)}<span class="marksk"> [${q.marks} mark${q.marks === 1 ? "" : "s"}]</span></div>
+            <div class="head">Q${g.startIndex + i} — Answer: ${mathHtml(q.correct_answer)}${
+              marksVary
+                ? `<span class="marksk"> [${q.marks} mark${q.marks === 1 ? "" : "s"}]</span>`
+                : ""
+            }</div>
             <div class="body">${mathHtml(q.solution)}</div>
           </div>`
         )

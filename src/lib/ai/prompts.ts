@@ -311,7 +311,12 @@ ABSOLUTE PRIORITY — the source is the authority:
 - Change the numbers, and where it reads naturally change the context (a copper wire becomes an aluminium one, a 60 W bulb becomes a 40 W one). The arithmetic must work out to a clean answer that a student can reach in exam time.
 - Keep the source's question type, its option style and the flavour of its distractors — a distractor should still encode the mistake the source's distractor encoded.
 - Do not simply reword the source. A student who has memorised the source's answer must not be able to answer yours from memory.
-- Never make the question harder or easier than its source.`;
+- Never make the question harder or easier than its source.
+
+EXCEPTION — sources marked "figure: this source has a diagram":
+- The figure printed with your question is the teacher's ORIGINAL, copied from their paper. It shows particular components, particular values and particular labels, and nothing can change it.
+- So for those questions, do NOT vary anything the figure shows. Keep every quantity, symbol, colour, letter and label exactly as the source has it, and reproduce that question as printed — repairing OCR damage and typesetting the maths, exactly as in REUSE mode.
+- Changing "10 Ω" to "20 Ω", or a colour band sequence, or the letters marking two points, while the printed figure still shows the original, produces a question a student cannot answer and a paper the teacher must throw away. If you cannot vary a question without contradicting its figure — and usually you cannot — reproduce it.`;
 
   return `${shared}
 

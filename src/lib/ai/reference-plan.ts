@@ -156,12 +156,42 @@ export function referencePlan(
     return blueprintReferencePlan(settings, bank);
   }
 
-  return selectReferenceItems(bank, settings.question_count).map((item) => ({
+  return orderForPrinting(
+    selectReferenceItems(bank, settings.question_count),
+    bank
+  ).map((item) => ({
     type: item.type,
     difficulty: item.difficulty,
     chapter: item.topic,
     reference: item,
   }));
+}
+
+/**
+ * Reorders the chosen questions into the order they should be PRINTED in.
+ *
+ * Selection and printing want opposite things. Choosing questions demands
+ * round-robin across topics, or the paper is three variations on Ohm's Law;
+ * printing them in that order gives a paper that lurches Ohm's Law → drift
+ * velocity → colour codes → power → back to Ohm's Law, which reads as
+ * disorganised and gives a student no run at a topic.
+ *
+ * So variety decides *which* questions and this decides *where they sit*:
+ * group them under their topic, topics in the order the reference printed
+ * them. The sort is stable, so within a topic the variety order survives —
+ * distinct archetypes still come before any repeat.
+ */
+export function orderForPrinting(
+  items: ReferenceItem[],
+  bank: ReferenceBank
+): ReferenceItem[] {
+  const rank = new Map(bank.topics.map((t, i) => [t.toLowerCase(), i]));
+  const unknown = bank.topics.length;
+  return [...items].sort(
+    (a, b) =>
+      (rank.get(a.topic.toLowerCase()) ?? unknown) -
+      (rank.get(b.topic.toLowerCase()) ?? unknown)
+  );
 }
 
 /**

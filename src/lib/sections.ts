@@ -1,6 +1,7 @@
 import {
   defaultSectionInstruction,
   defaultSubGroupInstruction,
+  isReferenceLed,
   subGroupStartingAt,
   type BlueprintSection,
   type Paper,
@@ -44,6 +45,42 @@ export function subHeadingFor(
 }
 
 /**
+ * Consecutive runs of the same chapter, each becoming a printed heading.
+ *
+ * Runs, not a bucket per distinct chapter: the stored order is what the
+ * teacher sees and can reorder on the review screen, and silently gathering
+ * question 40 up next to question 3 because they share a topic would fight
+ * that. A paper whose order has been shuffled simply prints more, smaller
+ * headings — which is the truth about it.
+ */
+function groupByChapter(questions: Question[]): SectionGroup[] {
+  const groups: SectionGroup[] = [];
+  let running = 1;
+  for (const q of questions) {
+    const heading = q.chapter?.trim() || null;
+    const last = groups[groups.length - 1];
+    if (last && last.heading === heading) {
+      last.questions.push(q);
+      continue;
+    }
+    groups.push({
+      section: null,
+      heading,
+      instruction: null,
+      questions: [q],
+      startIndex: running,
+    });
+    running = 1; // recomputed below once every group's size is known
+  }
+  let index = 1;
+  for (const g of groups) {
+    g.startIndex = index;
+    index += g.questions.length;
+  }
+  return groups;
+}
+
+/**
  * Group a paper's questions into printable parts. Questions whose section no
  * longer exists (or papers created before blueprint mode) fall into a trailing
  * unnamed group so nothing is ever silently dropped from an export.
@@ -53,6 +90,20 @@ export function groupBySection(paper: Paper): SectionGroup[] {
   const sections = paper.settings?.blueprint?.sections ?? [];
 
   if (sections.length === 0) {
+    /*
+     * A reference-led paper has no blueprint, so it used to print as one
+     * undifferentiated run of 45 questions. Its questions do carry a real
+     * topic each — the sub-topic heading the reference printed them under —
+     * and reference-plan.ts already orders them so those topics run together,
+     * so the printed paper can be grouped the way a real paper is.
+     *
+     * Only reference mode: an ordinary simple paper's "chapters" are the
+     * teacher's free-text list, which is often one entry, and heading every
+     * paper with it would be noise rather than structure.
+     */
+    if (isReferenceLed(paper.settings) && questions.length > 0) {
+      return groupByChapter(questions);
+    }
     return [
       {
         section: null,

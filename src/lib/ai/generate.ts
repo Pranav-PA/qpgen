@@ -399,9 +399,16 @@ function referenceCompositionBlock(slots: BatchSlot[]): string {
       if (slot.marks !== undefined) lines.push(`worth ${slot.marks} mark(s)`);
       if (slot.section_name) lines.push(`for ${slot.section_name}`);
       if (slot.subgroup_label) lines.push(`under "${slot.subgroup_label}"`);
+      /*
+       * A figure is the teacher's original, copied across unchanged, so a
+       * varied question contradicts it — the live paper that exposed this
+       * asked about a "Red, Red, Orange, Silver" resistor above a printed
+       * figure still banded Yellow-Violet-Brown-Gold. Nothing downstream can
+       * catch that: the verifier reads text and cannot see the diagram.
+       */
       lines.push(
         slot.reference?.figure
-          ? "figure: this source has a diagram printed with it, and that same diagram is printed with your question — your question may refer to it."
+          ? "figure: this source has a diagram printed with it, and that same diagram — the teacher's original — is printed with your question. Your question may refer to it, and you MUST NOT change any value, label or symbol the diagram shows. Reproduce this one as printed."
           : "figure: none — your question must be answerable from its text alone."
       );
       lines.push(`question: ${item.question_text}`);
