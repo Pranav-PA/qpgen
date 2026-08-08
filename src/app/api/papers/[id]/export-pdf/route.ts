@@ -60,8 +60,14 @@ export async function GET(
       success: false,
       error_message: message,
     });
+    /*
+     * Named no fallbacks: this used to offer "the Print view or the Word
+     * export", both of which were removed when exports were simplified to PDF
+     * (fdbea5f) — sending a teacher to look for them at the one moment they
+     * most need a way out.
+     */
     return jsonError(
-      `Building the PDF failed (${message}). You can still use the Print view or the Word export.`,
+      `Building the PDF failed (${message}). Your questions are safe — nothing was lost. Try the download again, and if it keeps failing you can still copy the questions from this review screen.`,
       500
     );
   }

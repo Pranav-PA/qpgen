@@ -192,6 +192,32 @@ export function fullPlan(
  * questions are generated in that same order — and correct when something has.
  */
 function unfilledSlots(plan: BatchSlot[], existing: Question[]): BatchSlot[] {
+  /*
+   * A reference-led slot is not interchangeable with any other: it stands for
+   * one specific question of the teacher's PDF. Counting would resume at the
+   * end of the plan, handing back a source the paper has already used — so
+   * deleting question 3 of 45 and pressing "Generate remaining" produced a
+   * duplicate of question 45 and left question 3's source unused. Match on the
+   * source id each question records instead.
+   */
+  if (plan.some((s) => s.reference)) {
+    const used = new Set(
+      existing.map((q) => q.reference_item_id).filter((x): x is string => !!x)
+    );
+    // Questions carrying no source id are hand-written, or were generated for
+    // a slot the bank could not supply; they fill the sourceless slots in
+    // order, which is all the information there is about them.
+    let sourceless = existing.filter((q) => !q.reference_item_id).length;
+    return plan.filter((slot) => {
+      if (slot.reference) return !used.has(slot.reference.id);
+      if (sourceless > 0) {
+        sourceless--;
+        return false;
+      }
+      return true;
+    });
+  }
+
   // A simple (non-blueprint) paper has one flat run of interchangeable slots,
   // so position within the paper is the only thing to match on.
   if (!plan.some((s) => s.section_id)) return plan.slice(existing.length);

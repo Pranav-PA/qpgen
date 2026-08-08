@@ -36,17 +36,17 @@ const FEATURES: { icon: IconName; title: string; body: string }[] = [
   {
     icon: "download",
     title: "Professional exports",
-    body: "Print-ready PDF with your institution's letterhead, and clean editable Word files — question paper and answer key as separate documents.",
+    body: "Print-ready PDF with your institution's letterhead — question paper and answer key as separate documents.",
   },
   {
     icon: "upload",
-    title: "Match your style",
-    body: "Upload a past paper as a reference PDF and the AI mirrors its style and difficulty — diagrams and equations included.",
+    title: "Work from your own paper",
+    body: "Upload a past paper or question bank and generate only from it — its diagrams come across with the questions. Or use it just as a style guide.",
   },
   {
     icon: "sparkles",
     title: "Real equations",
-    body: "Physics and Chemistry papers render proper mathematical notation everywhere: on screen, in PDF, and as native equations in Word.",
+    body: "Physics and Chemistry papers render proper mathematical notation everywhere — on screen and in the printed PDF.",
   },
 ];
 

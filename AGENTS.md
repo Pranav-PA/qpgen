@@ -9,7 +9,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - AI Question Paper Generator for teachers (JEE/NEET/Board). See README.md for setup.
 - Correctness is priority #1: generated questions go through a second-pass AI verifier; anything unconfirmed gets `needs_review` flags shown to the teacher. Never remove the "review before distributing" notices.
 - Question paper and answer key must always export as separate documents.
-- Question/solution text stores inline LaTeX (`$...$`). Rendering: KaTeX in UI/print (`src/components/MathText.tsx`), LaTeX→MathML(temml)→OMML(mathml2omml) for DOCX (`src/lib/docx/math.ts`).
+- Question/solution text stores inline LaTeX (`$...$`). Rendering: KaTeX in the UI (`src/components/MathText.tsx`) and again server-side for the PDF (`src/lib/pdf/html.ts`). **PDF is the only export.** A DOCX builder and print routes existed and were deleted in `fdbea5f` along with the temml/mathml2omml dependencies — don't reinstate them from this file's history, and don't promise Word anywhere in the UI.
 - Generation is client-driven in batches (`/api/papers/[id]/generate-batch`), resumable; slot plan is deterministic (`src/lib/ai/plan.ts`).
 - Rate limiting is atomic SQL (`consume_generation` in `supabase/migrations/001_init.sql`); RLS is the security boundary — service-role client (`src/lib/supabase/admin.ts`) only for rate-limit bookkeeping, usage logs, and admin routes.
 - `MOCK_AI=true` runs generation with free mock questions for local dev.

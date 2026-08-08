@@ -616,6 +616,12 @@ export async function reviseQuestion(opts: {
     correct_answer: string;
     solution: string;
     has_figure: boolean;
+    /**
+     * The printed diagram was copied out of the teacher's reference PDF rather
+     * than generated, so it cannot be re-rendered to match an edit — see the
+     * block this drives below.
+     */
+    figure_from_reference?: boolean;
   };
   instruction: string;
   provider: Provider;
@@ -630,8 +636,32 @@ export async function reviseQuestion(opts: {
     `correct_answer: ${current.correct_answer}`,
     `solution: ${current.solution}`,
     `Currently has a diagram: ${current.has_figure ? "yes" : "no"}`,
-    editInstructionBlock(instruction),
   ];
+
+  /*
+   * A reference paper's diagram is the teacher's own, cut out of their PDF.
+   * Unlike a generated figure it cannot be redrawn to follow an edit, so any
+   * value the edit changes must still match what the picture shows. Generation
+   * already refuses to vary these questions for the same reason; without this
+   * the edit path reopens the hole from the other side.
+   */
+  if (current.figure_from_reference) {
+    userParts.push(
+      [
+        "This question's diagram was copied from the teacher's reference paper.",
+        "It is a fixed image and nothing can change what it shows.",
+        "So every quantity, symbol, colour, letter and label that the diagram",
+        "carries must stay exactly as it is in the question above. If the note",
+        "asks for a change that the diagram would then contradict — different",
+        "resistances, a different colour code, different labelled points —",
+        "make the smallest change that leaves the diagram truthful, and say in",
+        "the solution what you kept and why. A question whose text disagrees",
+        "with its printed figure cannot be answered at all.",
+      ].join("\n")
+    );
+  }
+
+  userParts.push(editInstructionBlock(instruction));
 
   const res = await runAi(opts.provider, {
     purpose: "generate",

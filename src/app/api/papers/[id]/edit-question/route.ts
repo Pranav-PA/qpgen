@@ -76,6 +76,8 @@ export async function POST(
         correct_answer: old.correct_answer,
         solution: old.solution,
         has_figure: !!old.figure,
+        // A crop from the teacher's PDF, not something we can re-render.
+        figure_from_reference: !!old.figure && !!old.reference_item_id,
       },
       instruction: body.instruction,
       provider,
